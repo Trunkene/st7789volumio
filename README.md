@@ -22,9 +22,13 @@ ST7789(240x240) viewer for Volumio on Raspberry Pi
 [参照](#acknowledgments)
 
 ## Install
-* Volumio2が普通に動作している状態で、sshでvolumioユーザーで入って作業。
+* SPIの有効化を行うため、/boot/config.txtに下記を追記。  
+追記後、再起動
+```
+dtparam=spi=on
+```
 
-* [Requirement](#requirement)に載せた2つのフォントをダウンロードし、~/.local/share/fontsの下にコピー。  
+* [Requirement](#requirement)に載せた2つのフォントをダウンロードし、~volumio/.local/share/fontsの下にコピー。  
 ※フォント、配置場所を変えたい場合はソースで書き換えてください。
 
 * 適当にディレクトリを作り、コンパイルしたモジュール(st7789volumio)を配置。
