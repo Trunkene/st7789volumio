@@ -144,9 +144,9 @@ pub struct State<'a> {
 
     pub baseimg: RgbaImage,
 
-    pub title_txt_img: RgbaImage,
-    pub album_txt_img: RgbaImage,
-    pub artist_txt_img: RgbaImage,
+    pub title_txt_img: Option<RgbaImage>,
+    pub album_txt_img: Option<RgbaImage>,
+    pub artist_txt_img: Option<RgbaImage>,
 
     pub title_x: u32,
     pub album_x: u32,
@@ -182,9 +182,9 @@ impl State<'_> {
                 );
                 baseimg
             },
-            title_txt_img: RgbaImage::new(1, 1), // More good code will be...
-            album_txt_img: RgbaImage::new(1, 1),
-            artist_txt_img: RgbaImage::new(1, 1),
+            title_txt_img: None,
+            album_txt_img: None,
+            artist_txt_img: None,
             title_x: 0,
             album_x: 0,
             artist_x: 0,
@@ -209,40 +209,48 @@ impl State<'_> {
 /// Calc horizontal and vertical size for text to be draw.
 /// only for single line text.
 fn calc_text_size(font: &Font, text: &str, scale: Scale) -> (u32, u32) {
-    let v_metrics = font.v_metrics(scale);
-    let glyphs: Vec<_> = font.layout(text, scale, point(0.0, 0.0)).collect();
-    let glyphs_height = (v_metrics.ascent - v_metrics.descent).ceil() as u32;
-    let glyphs_width = {
-        let max_x = glyphs
-            .last()
-            .map(|g| g.pixel_bounding_box().unwrap().max.x)
-            .unwrap();
-        max_x as u32
-    };
-    (glyphs_width, glyphs_height)
+    if text.is_empty() {
+        (0u32, 0u32)
+    } else {
+        let v_metrics = font.v_metrics(scale);
+        let glyphs: Vec<_> = font.layout(text, scale, point(0.0, 0.0)).collect();
+        let glyphs_height = (v_metrics.ascent - v_metrics.descent).ceil() as u32;
+        let glyphs_width = {
+            let max_x = glyphs
+                .last()
+                .map(|g| g.pixel_bounding_box().unwrap().max.x)
+                .unwrap();
+            max_x as u32
+        };
+        (glyphs_width, glyphs_height)
+    }
 }
 
 /// Get image for text.
-fn get_text_img(font: &Font, text: &str, scale: Scale, col: image::Rgba<u8>) -> RgbaImage {
-    let t_w: u32;
-    let t_h: u32;
-    let black: image::Rgba<u8> = Rgba::from([0, 0, 0, 255]);
-
-    // Title text image
-    (t_w, t_h) = calc_text_size(&font, text, scale);
-
-    let w = if t_w <= DISP_AREA_WIDTH {
-        t_w
+fn get_text_img(font: &Font, text: &str, scale: Scale, col: image::Rgba<u8>) -> Option<RgbaImage> {
+    if text.is_empty() {
+        None
     } else {
-        t_w + 20 + DISP_AREA_WIDTH
-    };
-    let mut img = RgbaImage::new(w, t_h);
-    draw_filled_rect_mut(&mut img, Rect::at(0, 0).of_size(w, t_h), black);
-    draw_text_mut(&mut img, col, 0, 0, scale, &font, text);
-    if t_w > DISP_AREA_WIDTH {
-        draw_text_mut(&mut img, col, t_w + 20, 0, scale, &font, text);
+        let t_w: u32;
+        let t_h: u32;
+        let black: image::Rgba<u8> = Rgba::from([0, 0, 0, 255]);
+
+        // Title text image
+        (t_w, t_h) = calc_text_size(&font, text, scale);
+
+        let w = if t_w <= DISP_AREA_WIDTH {
+            t_w
+        } else {
+            t_w + 20 + DISP_AREA_WIDTH
+        };
+        let mut img = RgbaImage::new(w, t_h);
+        draw_filled_rect_mut(&mut img, Rect::at(0, 0).of_size(w, t_h), black);
+        draw_text_mut(&mut img, col, 0, 0, scale, &font, text);
+        if t_w > DISP_AREA_WIDTH {
+            draw_text_mut(&mut img, col, t_w + 20, 0, scale, &font, text);
+        }
+        Some(img)
     }
-    img
 }
 
 /// Get Information from Volumio.
@@ -431,73 +439,76 @@ fn draw_music_info(mut state: &mut State) {
     let mut restart_scroll = true;
     let baseimg = &mut state.baseimg;
 
-    let title_txt_img = &mut state.title_txt_img;
-    let title_x = state.title_x;
-    if title_txt_img.width() > DISP_AREA_WIDTH {
-        let h0 = title_txt_img.height();
-        let img0 = imageops::crop(title_txt_img, title_x, 0, DISP_AREA_WIDTH, h0);
-        imageops::overlay(baseimg, &img0, TITLE_INFO_X as u32, TITLE_INFO_Y as u32);
+    if let Some(ref mut title_txt_img) = state.title_txt_img {
+        let title_x = state.title_x;
+        if title_txt_img.width() > DISP_AREA_WIDTH {
+            let h0 = title_txt_img.height();
+            let img0 = imageops::crop(title_txt_img, title_x, 0, DISP_AREA_WIDTH, h0);
+            imageops::overlay(baseimg, &img0, TITLE_INFO_X as u32, TITLE_INFO_Y as u32);
 
-        if title_x < title_txt_img.width() - DISP_AREA_WIDTH {
-            state.title_x = title_x + 1;
+            if title_x < title_txt_img.width() - DISP_AREA_WIDTH {
+                state.title_x = title_x + 1;
 
-            restart_scroll = false;
+                restart_scroll = false;
+            }
+        } else {
+            imageops::overlay(
+                baseimg,
+                title_txt_img,
+                TITLE_INFO_X as u32,
+                TITLE_INFO_Y as u32,
+            );
         }
-    } else {
-        imageops::overlay(
-            baseimg,
-            title_txt_img,
-            TITLE_INFO_X as u32,
-            TITLE_INFO_Y as u32,
-        );
     }
 
-    let album_txt_img = &mut state.album_txt_img;
-    let album_x = state.album_x;
-    if album_txt_img.width() > DISP_AREA_WIDTH {
-        let h0 = album_txt_img.height();
-        let img0 = imageops::crop(album_txt_img, album_x, 0, DISP_AREA_WIDTH, h0);
-        imageops::overlay(baseimg, &img0, ALBUM_INFO_X as u32, ALBUM_INFO_Y as u32);
+    if let Some(ref mut album_txt_img) = state.album_txt_img {
+        let album_x = state.album_x;
+        if album_txt_img.width() > DISP_AREA_WIDTH {
+            let h0 = album_txt_img.height();
+            let img0 = imageops::crop(album_txt_img, album_x, 0, DISP_AREA_WIDTH, h0);
+            imageops::overlay(baseimg, &img0, ALBUM_INFO_X as u32, ALBUM_INFO_Y as u32);
 
-        if album_x < album_txt_img.width() - DISP_AREA_WIDTH {
-            state.album_x = album_x + 1;
+            if album_x < album_txt_img.width() - DISP_AREA_WIDTH {
+                state.album_x = album_x + 1;
 
-            restart_scroll = false;
+                restart_scroll = false;
+            }
+        } else {
+            imageops::overlay(
+                baseimg,
+                album_txt_img,
+                ALBUM_INFO_X as u32,
+                ALBUM_INFO_Y as u32,
+            );
         }
-    } else {
-        imageops::overlay(
-            baseimg,
-            album_txt_img,
-            ALBUM_INFO_X as u32,
-            ALBUM_INFO_Y as u32,
-        );
     }
 
-    let artist_txt_img = &mut state.artist_txt_img;
-    let artist_x = state.artist_x;
-    if artist_txt_img.width() > DISP_AREA_WIDTH {
-        let h0 = artist_txt_img.height();
-        let img0 = imageops::crop(artist_txt_img, artist_x, 0, DISP_AREA_WIDTH, h0);
-        imageops::overlay(baseimg, &img0, ARTIST_INFO_X as u32, ARTIST_INFO_Y as u32);
+    if let Some(ref mut artist_txt_img) = state.artist_txt_img {
+        let artist_x = state.artist_x;
+        if artist_txt_img.width() > DISP_AREA_WIDTH {
+            let h0 = artist_txt_img.height();
+            let img0 = imageops::crop(artist_txt_img, artist_x, 0, DISP_AREA_WIDTH, h0);
+            imageops::overlay(baseimg, &img0, ARTIST_INFO_X as u32, ARTIST_INFO_Y as u32);
 
-        if artist_x < artist_txt_img.width() - DISP_AREA_WIDTH {
-            state.artist_x = artist_x + 1;
+            if artist_x < artist_txt_img.width() - DISP_AREA_WIDTH {
+                state.artist_x = artist_x + 1;
 
-            restart_scroll = false;
+                restart_scroll = false;
+            }
+        } else {
+            imageops::overlay(
+                baseimg,
+                artist_txt_img,
+                ARTIST_INFO_X as u32,
+                ARTIST_INFO_Y as u32,
+            );
         }
-    } else {
-        imageops::overlay(
-            baseimg,
-            artist_txt_img,
-            ARTIST_INFO_X as u32,
-            ARTIST_INFO_Y as u32,
-        );
-    }
 
-    if restart_scroll {
-        state.title_x = 0;
-        state.album_x = 0;
-        state.artist_x = 0;
+        if restart_scroll {
+            state.title_x = 0;
+            state.album_x = 0;
+            state.artist_x = 0;
+        }
     }
 }
 
