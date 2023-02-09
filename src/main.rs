@@ -17,6 +17,7 @@ use rppal::{
 use rusttype::{point, Font, Scale};
 use serde::Deserialize;
 use serde_aux::prelude::*;
+use serde_with::*;
 use std::{
     env,
     env::Args,
@@ -103,12 +104,18 @@ const SPI_MAXSPEED_HZ: u32 = 48_000_000;
 ///
 
 /// Volumio info
+#[serde_as]
 #[derive(Deserialize, Clone)]
 pub struct Info {
+    #[serde_as(as = "DefaultOnNull")]
     pub status: String,
+    #[serde_as(as = "DefaultOnNull")]
     pub title: String,
+    #[serde_as(as = "DefaultOnNull")]
     pub album: String,
+    #[serde_as(as = "DefaultOnNull")]
     pub artist: String,
+    #[serde_as(as = "DefaultOnNull")]
     pub albumart: String,
     #[serde(default, deserialize_with = "deserialize_string_from_number")]
     pub samplerate: String,
@@ -320,8 +327,13 @@ fn update_state(mut state: &mut State) -> Result<(), Box<dyn std::error::Error>>
             if !info.albumart.eq(&pre_info.albumart) || state.mpd_status_change {
                 // Thumbnail
                 let img_bytes =
+                    if info.albumart.starts_with("http:") {
+                    reqwest::blocking::get(format!("{}", &info.albumart))?
+                        .bytes()?
+                    } else {
                     reqwest::blocking::get(format!("{}{}", MDP_BASE_URL, &info.albumart))?
-                        .bytes()?;
+                        .bytes()?
+                    };
                 let img = image::load_from_memory(&img_bytes).unwrap();
 
                 let resized_img = img.resize(THUMB_WIDTH, THUMB_HEIGHT, FilterType::Triangle);
@@ -356,7 +368,11 @@ fn update_state(mut state: &mut State) -> Result<(), Box<dyn std::error::Error>>
             }
 
             // Seek bar
-            let seek_pos = SEEK_WIDTH * info.seek / (info.duration * 1000);
+            let seek_pos = if info.duration > 0 {
+              SEEK_WIDTH * info.seek / (info.duration * 1000)
+            } else {
+              0
+            };
             if (seek_pos != state.seek_pos) || state.mpd_status_change {
                 draw_filled_rect_mut(
                     baseimg,
