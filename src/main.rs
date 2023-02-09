@@ -6,7 +6,7 @@ use st7789volumio::{St7789, St7789Img, ROTATION};
 use chrono::Local;
 use image::imageops;
 use image::imageops::FilterType;
-use image::{Rgba, RgbaImage};
+use image::{GenericImageView, Rgba, RgbaImage};
 use imageproc::drawing::{draw_filled_rect_mut, draw_hollow_rect_mut, draw_text_mut};
 use imageproc::rect::Rect;
 use rppal::{gpio, spi};
@@ -326,19 +326,32 @@ fn update_state(mut state: &mut State) -> Result<(), Box<dyn std::error::Error>>
             // Albumart changed
             if !info.albumart.eq(&pre_info.albumart) || state.mpd_status_change {
                 // Thumbnail
-                let img_bytes =
-                    if info.albumart.starts_with("http:") {
-                    reqwest::blocking::get(format!("{}", &info.albumart))?
-                        .bytes()?
-                    } else {
+                let img_bytes = if info.albumart.starts_with("http:") {
+                    reqwest::blocking::get(format!("{}", &info.albumart))?.bytes()?
+                } else {
                     reqwest::blocking::get(format!("{}{}", MDP_BASE_URL, &info.albumart))?
                         .bytes()?
-                    };
+                };
                 let img = image::load_from_memory(&img_bytes).unwrap();
 
                 let resized_img = img.resize(THUMB_WIDTH, THUMB_HEIGHT, FilterType::Triangle);
 
-                imageops::overlay(baseimg, &resized_img, THUMB_X as u32, THUMB_Y as u32);
+                let x_of: i32 = if resized_img.width() >= THUMB_WIDTH {
+                    0
+                } else {
+                    ((THUMB_WIDTH - resized_img.width()) / 2) as i32
+                };
+                let y_of: i32 = if resized_img.height() >= THUMB_HEIGHT {
+                    0
+                } else {
+                    ((THUMB_HEIGHT - resized_img.height()) / 2) as i32
+                };
+                imageops::overlay(
+                    baseimg,
+                    &resized_img,
+                    (THUMB_X + x_of) as u32,
+                    (THUMB_Y + y_of) as u32,
+                );
                 draw_hollow_rect_mut(
                     baseimg,
                     Rect::at(THUMB_X, THUMB_Y).of_size(THUMB_WIDTH, THUMB_HEIGHT),
@@ -369,9 +382,9 @@ fn update_state(mut state: &mut State) -> Result<(), Box<dyn std::error::Error>>
 
             // Seek bar
             let seek_pos = if info.duration > 0 {
-              SEEK_WIDTH * info.seek / (info.duration * 1000)
+                SEEK_WIDTH * info.seek / (info.duration * 1000)
             } else {
-              0
+                0
             };
             if (seek_pos != state.seek_pos) || state.mpd_status_change {
                 draw_filled_rect_mut(
