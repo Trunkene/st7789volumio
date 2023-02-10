@@ -107,12 +107,14 @@ const SPI_MAXSPEED_HZ: u32 = 48_000_000;
 #[serde_as]
 #[derive(Deserialize, Clone)]
 pub struct Info {
-    #[serde_as(as = "DefaultOnNull")]
     pub status: String,
+    #[serde(default)]
     #[serde_as(as = "DefaultOnNull")]
     pub title: String,
+    #[serde(default)]
     #[serde_as(as = "DefaultOnNull")]
     pub album: String,
+    #[serde(default)]
     #[serde_as(as = "DefaultOnNull")]
     pub artist: String,
     #[serde_as(as = "DefaultOnNull")]
@@ -124,6 +126,7 @@ pub struct Info {
     #[serde(default)]
     pub channels: u32,
     pub seek: u32,
+    #[serde(default)]
     pub duration: u32,
 }
 
