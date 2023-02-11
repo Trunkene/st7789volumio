@@ -329,7 +329,7 @@ fn update_state(mut state: &mut State) -> Result<(), Box<dyn std::error::Error>>
             // Albumart changed
             if !info.albumart.eq(&pre_info.albumart) || state.mpd_status_change {
                 // Thumbnail
-                let img_bytes = if info.albumart.starts_with("http:") {
+                let img_bytes = if info.albumart.starts_with("http") {
                     reqwest::blocking::get(format!("{}", &info.albumart))?.bytes()?
                 } else {
                     reqwest::blocking::get(format!("{}{}", MDP_BASE_URL, &info.albumart))?
