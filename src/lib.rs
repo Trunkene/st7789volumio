@@ -4,7 +4,7 @@
 
 pub mod control;
 
-use crate::control::{DisplayError, WriteOnlyDataCommand};
+use crate::control::WriteOnlyDataCommand;
 use image::RgbaImage;
 use rppal::gpio::OutputPin;
 use std::{cmp, thread, time::Duration};
@@ -243,23 +243,23 @@ where
             thread::sleep(Duration::from_millis(10)); // 0.01sec
             bl.set_high();
         }
-        self.reset();
+        self.reset()?;
 
-        self.send_command(ST7789_SWRESET); // reset display
+        self.send_command(ST7789_SWRESET)?; // reset display
         thread::sleep(Duration::from_millis(200));
-        self.send_command(ST7789_SLPOUT); // turn off sleep
+        self.send_command(ST7789_SLPOUT)?; // turn off sleep
         thread::sleep(Duration::from_millis(200));
-        self.send_command(ST7789_VSCRDER); // vertical scroll definition
-        self.send_data(&[0x00u8, 0x00u8, 0x14u8, 0x00u8, 0x00u8, 0x00u8]); // 0 TSA, 320 VSA, 0 BSA
-        self.send_command(ST7789_NORON); // turn on display
+        self.send_command(ST7789_VSCRDER)?; // vertical scroll definition
+        self.send_data(&[0x00u8, 0x00u8, 0x14u8, 0x00u8, 0x00u8, 0x00u8])?; // 0 TSA, 320 VSA, 0 BSA
+        self.send_command(ST7789_NORON)?; // turn on display
         thread::sleep(Duration::from_millis(10));
-        self.send_command(ST7789_INVON); // back?
+        self.send_command(ST7789_INVON)?; // back?
 
-        self.set_rotation(self.rotation);
+        self.set_rotation(self.rotation)?;
 
-        self.send_command(ST7789_COLMOD); // 16bit 65k color
-        self.send_data(&[0x55u8]);
-        self.send_command(ST7789_DISPON); // turn on display
+        self.send_command(ST7789_COLMOD)?; // 16bit 65k color
+        self.send_data(&[0x55u8])?;
+        self.send_command(ST7789_DISPON)?; // turn on display
         thread::sleep(Duration::from_millis(200));
 
         Ok(())
@@ -280,8 +280,8 @@ where
 
     // Set display rotation
     pub fn set_rotation(&mut self, rotation: ROTATION) -> Result<(), Error> {
-        self.send_command(ST7789_MADCTL); // reset display
-        self.send_data(&[rotation as u8]);
+        self.send_command(ST7789_MADCTL)?; // reset display
+        self.send_data(&[rotation as u8])?;
         self.rotation = rotation;
         Ok(())
     }
@@ -289,29 +289,30 @@ where
     // Set the pixel address window for proceeding drawing commands.
     // x0 and x1 should define the minimum and muximum x pixel bounds.
     // y0 and y1 should define the minimum and maximum y pixel bounds.
-    pub fn set_window(&mut self, x0: u16, y0: u16, x1: u16, y1: u16) {
-        self.send_command(ST7789_CASET); // Column addr set
-        self.send_data(&x0.to_be_bytes());
-        self.send_data(&x1.to_be_bytes());
-        self.send_command(ST7789_RASET); // Row addr set
-        self.send_data(&y0.to_be_bytes());
-        self.send_data(&y1.to_be_bytes());
+    pub fn set_window(&mut self, x0: u16, y0: u16, x1: u16, y1: u16) -> Result<(), Error> {
+        self.send_command(ST7789_CASET)?; // Column addr set
+        self.send_data(&x0.to_be_bytes())?;
+        self.send_data(&x1.to_be_bytes())?;
+        self.send_command(ST7789_RASET)?; // Row addr set
+        self.send_data(&y0.to_be_bytes())?;
+        self.send_data(&y1.to_be_bytes())?;
+        Ok(())
     }
 
     // Write the provided image to the hardware
     pub fn display_img(&mut self, img: &St7789Img) -> Result<(), Error> {
         // Set address bounds to entire display
-        self.set_window(self.x0, self.y0, self.x1, self.y1);
+        self.set_window(self.x0, self.y0, self.x1, self.y1)?;
 
-        self.send_command(ST7789_RAMWR); // Write to RAM
-                                         // Write data to H/W
+        self.send_command(ST7789_RAMWR)?; // Write to RAM
+                                          // Write data to H/W
         let mut i = 0;
         let n = img.img_buff.len();
 
         while i < n {
             let end = cmp::min(i + CHUNK_SIZE as usize, n);
             let slice = &img.img_buff[i..end];
-            self.send_data(slice);
+            self.send_data(slice)?;
             i = end;
         }
         Ok(())

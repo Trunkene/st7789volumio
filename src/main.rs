@@ -1,6 +1,6 @@
 //! Volumio TFT st7789 viewer
 
-use st7789volumio::control::{SPIInterfaceAutoCS, WriteOnlyDataCommand};
+use st7789volumio::control::SPIInterfaceAutoCS;
 use st7789volumio::{St7789, St7789Img, ROTATION};
 
 use chrono::Local;
@@ -9,9 +9,9 @@ use image::imageops::FilterType;
 use image::{GenericImageView, Rgba, RgbaImage};
 use imageproc::drawing::{draw_filled_rect_mut, draw_hollow_rect_mut, draw_text_mut};
 use imageproc::rect::Rect;
-use rppal::{gpio, spi};
+use rppal::spi;
 use rppal::{
-    gpio::{Gpio, Level},
+    gpio::Gpio,
     spi::{Bus, SlaveSelect, Spi},
 };
 use rusttype::{point, Font, Scale};
@@ -19,9 +19,7 @@ use serde::Deserialize;
 use serde_aux::prelude::*;
 use serde_with::*;
 use std::{
-    env,
-    env::Args,
-    fs,
+    env, fs,
     str::FromStr,
     thread,
     time::{Duration, Instant},
@@ -437,7 +435,7 @@ fn update_state(mut state: &mut State) -> Result<(), Box<dyn std::error::Error>>
 }
 
 /// Update image in clock mode.
-fn draw_clock(mut state: &mut State) {
+fn draw_clock(state: &mut State) {
     let baseimg = &mut state.baseimg;
     let dt = Local::now();
 
@@ -572,7 +570,7 @@ fn get_param() -> (u8, u8, u8, u8, u8) {
     for arg in env::args() {
         if &arg[0..1] == "-" {
             let v = &arg[2..];
-            let val = match v.parse::<u8>() {
+            match v.parse::<u8>() {
                 Ok(val) => match &arg[0..2] {
                     "-s" => spi = val,
                     "-c" => cs = val,
@@ -584,7 +582,7 @@ fn get_param() -> (u8, u8, u8, u8, u8) {
                         panic!()
                     }
                 },
-                Err(e) => {
+                Err(_e) => {
                     usage();
                     panic!()
                 }
@@ -596,15 +594,14 @@ fn get_param() -> (u8, u8, u8, u8, u8) {
 
 /// Main routine
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut args: Args = env::args();
     let (spi_n, cs_n, dc_n, rst_n, blk_n) = get_param();
 
     let mut state = State::new();
 
-    let mut gpio = Gpio::new().expect("Failed Gpio::new");
-    let mut dc_pin = gpio.get(dc_n)?.into_output();
-    let mut rst_pin = gpio.get(rst_n)?.into_output();
-    let mut blk_pin = gpio.get(blk_n)?.into_output();
+    let gpio = Gpio::new().expect("Failed Gpio::new");
+    let dc_pin = gpio.get(dc_n)?.into_output();
+    let rst_pin = gpio.get(rst_n)?.into_output();
+    let blk_pin = gpio.get(blk_n)?.into_output();
     let spi_bus = match spi_n {
         1 => Bus::Spi1,
         2 => Bus::Spi2,
@@ -615,8 +612,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         2 => SlaveSelect::Ss2,
         _ => SlaveSelect::Ss0,
     };
-    let mut spi =
-        Spi::new(spi_bus, cs, SPI_MAXSPEED_HZ, spi::Mode::Mode3).expect("failed Spi::new");
+    let spi = Spi::new(spi_bus, cs, SPI_MAXSPEED_HZ, spi::Mode::Mode3).expect("failed Spi::new");
 
     let di = SPIInterfaceAutoCS::new(spi, dc_pin);
     let mut st7789 = St7789::new(
@@ -629,7 +625,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     let mut st7789img = St7789Img::new(DISP_WIDTH, DISP_HEIGHT);
     // Display
-    st7789.init();
+    st7789.init().unwrap();
 
     let mut is_first = true;
     let mut now_t = Instant::now();
@@ -654,12 +650,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let mut baseimg = &mut state.baseimg;
         st7789img.set_image(&mut baseimg);
-        st7789
-            .display_img(&st7789img)
-            .expect("Failed st7789 display_img");
+        if let Err(_e) = st7789.display_img(&st7789img) {
+            // Might be panic and exit is much better...
+            eprintln!("Failed st7789 display_img");
+        }
 
         thread::sleep(Duration::from_millis(interval));
     }
-
+    #[allow(unreachable_code)]
     Ok(())
 }

@@ -1,7 +1,6 @@
 ///
 /// SPI Control parts.
 ///
-
 use rppal::gpio::OutputPin;
 use rppal::spi::Spi;
 
@@ -95,7 +94,7 @@ impl WriteOnlyDataCommand for SPIInterfaceAutoCS {
         self.dc.set_low();
         self.spi
             .write(&[cmd])
-            .map_err(|_| DisplayError::BusWriteError);
+            .map_err(|_| DisplayError::BusWriteError)?;
         Ok(())
     }
 
@@ -104,7 +103,7 @@ impl WriteOnlyDataCommand for SPIInterfaceAutoCS {
         self.dc.set_high();
         self.spi
             .write(data)
-            .map_err(|_| DisplayError::BusWriteError);
+            .map_err(|_| DisplayError::BusWriteError)?;
         Ok(())
     }
 }
