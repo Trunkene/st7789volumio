@@ -28,6 +28,7 @@ pub enum DisplayError {
 ///
 
 // Use this if default CS used for specific spi.
+#[derive(Debug)]
 pub struct SPIInterfaceAutoCS {
     spi: Spi,
     dc: OutputPin,
@@ -35,6 +36,7 @@ pub struct SPIInterfaceAutoCS {
 
 // Use this if not default CS port is need to switch manually.
 // Note: Never use this if CS is default for spi.
+#[derive(Debug)]
 pub struct SPIInterfaceManualCS {
     spi_no_cs: SPIInterfaceAutoCS,
     cs: OutputPin,

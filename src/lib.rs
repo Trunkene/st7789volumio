@@ -84,7 +84,7 @@ pub enum Error {
 }
 
 #[repr(u8)]
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub enum ROTATION {
     Rot0 = 0x00u8,
     Rot90 = 0x60u8,
@@ -92,12 +92,14 @@ pub enum ROTATION {
     Rot270 = 0xa0u8,
 }
 
+#[derive(Debug)]
 pub struct St7789Img {
     width: u32,
     height: u32,
     img_buff: Vec<u8>,
 }
 
+#[derive(Debug)]
 pub struct St7789<DI>
 where
     DI: WriteOnlyDataCommand,
@@ -135,9 +137,9 @@ impl St7789Img {
             for j in 0..self.width {
                 let p = image.get_pixel_mut(j, i);
                 self.img_buff[k] = (p[0] & 0xf8u8) | ((p[1] >> 5) & 0x07u8);
-                k = k + 1;
+                k += 1;
                 self.img_buff[k] = ((p[1] << 3) & 0xe0u8) | ((p[2] >> 3) & 0x1fu8);
-                k = k + 1;
+                k += 1;
             }
         }
     }
@@ -191,8 +193,8 @@ where
             width,
             height,
             rotation,
-            x0: 0u16 + x_offset,
-            y0: 0u16 + y_offset,
+            x0: x_offset,
+            y0: y_offset,
             x1: width as u16 + x_offset - 1u16,
             y1: height as u16 + y_offset - 1u16,
         }
@@ -219,7 +221,7 @@ where
     }
 
     pub fn send_data(&mut self, data: &[u8]) -> Result<(), Error> {
-        self.di.send_data(&data).map_err(|_| Error::DisplayError)
+        self.di.send_data(data).map_err(|_| Error::DisplayError)
     }
 
     // Reset the display, if reset pin is connected.

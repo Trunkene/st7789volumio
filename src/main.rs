@@ -103,7 +103,7 @@ const SPI_MAXSPEED_HZ: u32 = 48_000_000;
 
 /// Volumio info
 #[serde_as]
-#[derive(Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct Info {
     pub status: String,
     #[serde(default)]
@@ -145,7 +145,14 @@ impl Info {
     }
 }
 
+impl Default for Info {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Global status
+#[derive(Debug)]
 pub struct State<'a> {
     pub pre_info: Info,
     pub mpd_status_change: bool,
@@ -179,7 +186,7 @@ pub struct State<'a> {
 impl State<'_> {
     pub fn new() -> State<'static> {
         State {
-            pre_info: Info::new(),
+            pre_info: Info::default(),
             mpd_status_change: true,
             baseimg: {
                 let mut baseimg = RgbaImage::new(DISP_WIDTH, DISP_HEIGHT);
@@ -244,7 +251,7 @@ fn get_text_img(font: &Font, text: &str, scale: Scale, col: image::Rgba<u8>) -> 
         let black: image::Rgba<u8> = Rgba::from([0, 0, 0, 255]);
 
         // Title text image
-        (t_w, t_h) = calc_text_size(&font, text, scale);
+        (t_w, t_h) = calc_text_size(font, text, scale);
 
         let w = if t_w <= DISP_AREA_WIDTH {
             t_w
@@ -253,9 +260,9 @@ fn get_text_img(font: &Font, text: &str, scale: Scale, col: image::Rgba<u8>) -> 
         };
         let mut img = RgbaImage::new(w, t_h);
         draw_filled_rect_mut(&mut img, Rect::at(0, 0).of_size(w, t_h), black);
-        draw_text_mut(&mut img, col, 0, 0, scale, &font, text);
+        draw_text_mut(&mut img, col, 0, 0, scale, font, text);
         if t_w > DISP_AREA_WIDTH {
-            draw_text_mut(&mut img, col, t_w + 20, 0, scale, &font, text);
+            draw_text_mut(&mut img, col, t_w + 20, 0, scale, font, text);
         }
         Some(img)
     }
@@ -264,7 +271,7 @@ fn get_text_img(font: &Font, text: &str, scale: Scale, col: image::Rgba<u8>) -> 
 /// Get Information from Volumio.
 fn update_state(mut state: &mut State) -> Result<(), Box<dyn std::error::Error>> {
     // get MDP status
-    if let Ok(res) = reqwest::blocking::get(format!("{}{}", MDP_BASE_URL, GET_STATE_API)) {
+    if let Ok(res) = reqwest::blocking::get(format!("{MDP_BASE_URL}{GET_STATE_API}")) {
         if let Ok(info) = res.json::<Info>() {
             let baseimg = &mut state.baseimg;
             let pre_info = &mut state.pre_info;
@@ -328,7 +335,7 @@ fn update_state(mut state: &mut State) -> Result<(), Box<dyn std::error::Error>>
             if !info.albumart.eq(&pre_info.albumart) || state.mpd_status_change {
                 // Thumbnail
                 let img_bytes = if info.albumart.starts_with("http") {
-                    reqwest::blocking::get(format!("{}", &info.albumart))?.bytes()?
+                    reqwest::blocking::get(info.albumart.to_string())?.bytes()?
                 } else {
                     reqwest::blocking::get(format!("{}{}", MDP_BASE_URL, &info.albumart))?
                         .bytes()?
@@ -361,7 +368,7 @@ fn update_state(mut state: &mut State) -> Result<(), Box<dyn std::error::Error>>
             }
             // SampleRate/BitDepth/Channels
             if let Some(sr) = info.samplerate.split_whitespace().next() {
-                let sr0 = format!("{:.0}", f64::from_str(&sr)? * 1000.0);
+                let sr0 = format!("{:.0}", f64::from_str(sr)? * 1000.0);
                 if let Some(bd) = info.bitdepth.split_whitespace().next() {
                     let s = format!("{}:{}:{}", sr0, bd, info.channels);
                     draw_filled_rect_mut(
@@ -407,7 +414,7 @@ fn update_state(mut state: &mut State) -> Result<(), Box<dyn std::error::Error>>
             let temp = match fs::read_to_string(CPU_THM_FILE) {
                 Ok(temp) => {
                     let n: f32 = temp.trim().parse::<f32>().unwrap() / 1000.0f32;
-                    format!("CPU {:.1} C", n)
+                    format!("CPU {n:.1} C")
                 }
                 Err(_) => "CPU --.- C".to_string(),
             };
@@ -427,7 +434,7 @@ fn update_state(mut state: &mut State) -> Result<(), Box<dyn std::error::Error>>
             );
 
             // backup info
-            *pre_info = info.clone();
+            *pre_info = info;
             state.mpd_status_change = false;
         }
     }
@@ -545,9 +552,9 @@ fn draw_music_info(mut state: &mut State) {
 /// Output Usage
 fn usage() {
     println!("st7789volumio");
-    println!("");
+    println!();
     println!("Usage: st7789volumio [OPTIONS]");
-    println!("");
+    println!();
     println!("Options:");
     println!(" -s<spi_bus>      SPI bus (0, 1, 2): Default 0");
     println!(" -c<cs_pin>        Slave Select pin (0, 1, 2): Default 0");
@@ -648,8 +655,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             CLOCK_INTERVAL_MSEC
         };
 
-        let mut baseimg = &mut state.baseimg;
-        st7789img.set_image(&mut baseimg);
+        let baseimg = &mut state.baseimg;
+        st7789img.set_image(baseimg);
         if let Err(_e) = st7789.display_img(&st7789img) {
             // Might be panic and exit is much better...
             eprintln!("Failed st7789 display_img");
