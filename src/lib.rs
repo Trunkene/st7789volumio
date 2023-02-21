@@ -221,6 +221,8 @@ where
     }
 
     pub fn send_data(&mut self, data: &[u8]) -> Result<(), Error> {
+ 	// It's better to check or loop for data size over CHUNK_SIZE here...
+ 	// But for performance, you have to do them in caller.
         self.di.send_data(data).map_err(|_| Error::DisplayError)
     }
 
