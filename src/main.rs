@@ -98,6 +98,15 @@ const DEF_GPIO_BLK_PIN: u8 = 24;
 const SPI_MAXSPEED_HZ: u32 = 48_000_000;
 
 ///
+/// Globals
+///
+
+static COLOR_BLACK: image::Rgba<u8> = Rgba::<u8>([0u8, 0u8, 0u8, 255u8]);
+static COLOR_WHITE: image::Rgba<u8> = Rgba::<u8>([255u8, 255u8, 255u8, 255u8]);
+static COLOR_GREY: image::Rgba<u8> = Rgba::<u8>([120u8, 120u8, 120u8, 255u8]);
+static COLOR_LIGHTBLUE: image::Rgba<u8> = Rgba::<u8>([176u8, 224u8, 255u8, 255u8]); 
+
+///
 /// Data-type definitions.
 ///
 
@@ -176,11 +185,6 @@ pub struct State<'a> {
 
     font_i: Font<'a>,
     font_n: Font<'a>,
-
-    pub color_black: image::Rgba<u8>,
-    pub color_white: image::Rgba<u8>,
-    pub color_grey: image::Rgba<u8>,
-    pub color_lightblue: image::Rgba<u8>,
 }
 
 impl State<'_> {
@@ -193,7 +197,7 @@ impl State<'_> {
                 draw_filled_rect_mut(
                     &mut baseimg,
                     Rect::at(0, 0).of_size(DISP_WIDTH, DISP_HEIGHT),
-                    Rgba::from([0, 0, 0, 255]),
+                    COLOR_BLACK,
                 );
                 baseimg
             },
@@ -212,11 +216,6 @@ impl State<'_> {
 
             font_i: Font::try_from_vec(fs::read(INFO_FONT).unwrap()).unwrap(),
             font_n: Font::try_from_vec(fs::read(NUM_FONT).unwrap()).unwrap(),
-
-            color_black: Rgba::from([0, 0, 0, 255]),
-            color_white: Rgba::from([255, 255, 255, 255]),
-            color_grey: Rgba::from([120, 120, 120, 255]),
-            color_lightblue: Rgba::from([176, 224, 255, 255]),
         }
     }
 }
@@ -248,7 +247,6 @@ fn get_text_img(font: &Font, text: &str, scale: Scale, col: image::Rgba<u8>) -> 
     } else {
         let t_w: u32;
         let t_h: u32;
-        let black: image::Rgba<u8> = Rgba::from([0, 0, 0, 255]);
 
         // Title text image
         (t_w, t_h) = calc_text_size(font, text, scale);
@@ -259,7 +257,7 @@ fn get_text_img(font: &Font, text: &str, scale: Scale, col: image::Rgba<u8>) -> 
             t_w + 20 + DISP_AREA_WIDTH
         };
         let mut img = RgbaImage::new(w, t_h);
-        draw_filled_rect_mut(&mut img, Rect::at(0, 0).of_size(w, t_h), black);
+        draw_filled_rect_mut(&mut img, Rect::at(0, 0).of_size(w, t_h), COLOR_BLACK);
         draw_text_mut(&mut img, col, 0, 0, scale, font, text);
         if t_w > DISP_AREA_WIDTH {
             draw_text_mut(&mut img, col, t_w + 20, 0, scale, font, text);
@@ -281,7 +279,7 @@ fn update_state(mut state: &mut State) -> Result<(), Box<dyn std::error::Error>>
                     baseimg,
                     Rect::at(DISP_AREA_MARGIN_X, DISP_AREA_MARGIN_Y)
                         .of_size(DISP_AREA_WIDTH, DISP_AREA_HEIGHT),
-                    state.color_black,
+                    COLOR_BLACK,
                 );
 
                 state.mpd_status_change = true;
@@ -294,25 +292,25 @@ fn update_state(mut state: &mut State) -> Result<(), Box<dyn std::error::Error>>
                     &state.font_i,
                     &info.title,
                     state.scale_l,
-                    state.color_lightblue,
+                    COLOR_LIGHTBLUE,
                 );
                 draw_filled_rect_mut(
                     baseimg,
                     Rect::at(TITLE_INFO_X, TITLE_INFO_Y)
                         .of_size(TITLE_INFO_WIDTH, TITLE_INFO_HEIGHT),
-                    state.color_black,
+                    COLOR_BLACK,
                 );
             }
             // Album changed
             if !info.album.eq(&pre_info.album) {
                 state.album_x = 0;
                 state.album_txt_img =
-                    get_text_img(&state.font_i, &info.album, state.scale_m, state.color_white);
+                    get_text_img(&state.font_i, &info.album, state.scale_m, COLOR_WHITE);
                 draw_filled_rect_mut(
                     baseimg,
                     Rect::at(ALBUM_INFO_X, ALBUM_INFO_Y)
                         .of_size(ALBUM_INFO_WIDTH, ALBUM_INFO_HEIGHT),
-                    state.color_black,
+                    COLOR_BLACK,
                 );
             }
             // Artist changed
@@ -322,13 +320,13 @@ fn update_state(mut state: &mut State) -> Result<(), Box<dyn std::error::Error>>
                     &state.font_i,
                     &info.artist,
                     state.scale_m,
-                    state.color_white,
+                    COLOR_WHITE,
                 );
                 draw_filled_rect_mut(
                     baseimg,
                     Rect::at(ARTIST_INFO_X, ARTIST_INFO_Y)
                         .of_size(ARTIST_INFO_WIDTH, ARTIST_INFO_HEIGHT),
-                    state.color_black,
+                    COLOR_BLACK,
                 );
             }
             // Albumart changed
@@ -363,7 +361,7 @@ fn update_state(mut state: &mut State) -> Result<(), Box<dyn std::error::Error>>
                 draw_hollow_rect_mut(
                     baseimg,
                     Rect::at(THUMB_X, THUMB_Y).of_size(THUMB_WIDTH, THUMB_HEIGHT),
-                    state.color_white,
+                    COLOR_WHITE,
                 );
             }
             // SampleRate/BitDepth/Channels
@@ -374,11 +372,11 @@ fn update_state(mut state: &mut State) -> Result<(), Box<dyn std::error::Error>>
                     draw_filled_rect_mut(
                         baseimg,
                         Rect::at(AUDIO_X, AUDIO_Y).of_size(AUDIO_WIDTH, AUDIO_HEIGHT),
-                        state.color_black,
+                        COLOR_BLACK,
                     );
                     draw_text_mut(
                         baseimg,
-                        state.color_white,
+                        COLOR_WHITE,
                         AUDIO_X as u32,
                         AUDIO_Y as u32,
                         state.scale_s,
@@ -398,13 +396,13 @@ fn update_state(mut state: &mut State) -> Result<(), Box<dyn std::error::Error>>
                 draw_filled_rect_mut(
                     baseimg,
                     Rect::at(SEEK_X, SEEK_Y).of_size(SEEK_WIDTH, SEEK_HEIGHT),
-                    state.color_grey,
+                    COLOR_GREY,
                 );
                 if seek_pos > 0 {
                     draw_filled_rect_mut(
                         baseimg,
                         Rect::at(SEEK_X, SEEK_Y).of_size(seek_pos, SEEK_HEIGHT),
-                        state.color_white,
+                        COLOR_WHITE,
                     );
                 }
                 state.seek_pos = seek_pos;
@@ -421,11 +419,11 @@ fn update_state(mut state: &mut State) -> Result<(), Box<dyn std::error::Error>>
             draw_filled_rect_mut(
                 baseimg,
                 Rect::at(CPU_THM_X, CPU_THM_Y).of_size(CPU_THM_WIDTH, CPU_THM_HEIGHT),
-                state.color_black,
+                COLOR_BLACK,
             );
             draw_text_mut(
                 baseimg,
-                Rgba([255u8, 255u8, 255u8, 255u8]),
+                COLOR_WHITE,
                 CPU_THM_X as u32,
                 CPU_THM_Y as u32,
                 state.scale_s,
@@ -449,11 +447,11 @@ fn draw_clock(state: &mut State) {
     draw_filled_rect_mut(
         baseimg,
         Rect::at(DISP_AREA_MARGIN_X, DISP_AREA_MARGIN_Y).of_size(DISP_AREA_WIDTH, DISP_AREA_HEIGHT),
-        state.color_black,
+        COLOR_BLACK,
     );
     draw_text_mut(
         baseimg,
-        state.color_white,
+        COLOR_WHITE,
         DATE_INFO_X as u32,
         DATE_INFO_Y as u32,
         state.scale_m,
@@ -462,7 +460,7 @@ fn draw_clock(state: &mut State) {
     );
     draw_text_mut(
         baseimg,
-        state.color_white,
+        COLOR_WHITE,
         TIME_INFO_X as u32,
         TIME_INFO_Y as u32,
         state.scale_xl,
