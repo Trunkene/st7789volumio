@@ -23,9 +23,20 @@ ST7789(240x240) viewer for Volumio on Raspberry Pi
 
 ## Install
 * SPIの有効化を行うため、/boot/config.txtに下記を追記。  
-追記後、再起動
+追記後、再起動。
 ```
 dtparam=spi=on
+```
+
+* Audio VisualizerをONにする場合(起動パラメータ -x1)、/volumio/app/plugins/music_service/mpd/mpd.conf.tmplに下記を変更。
+変更後、再起動。
+```
+audio_output {
+    type      "fifo"
+    enabled   "yes"
+    path      "/tmp/snapfifo"
+    format    "44100:16:1"
+}
 ```
 
 * [Requirement](#requirement)に載せた2つのフォントをダウンロードし、~volumio/.local/share/fontsの下にコピー。  
@@ -54,6 +65,7 @@ Options:
  -d<pin>        GPIO pin number for DC: Default 25  
  -r<pin>        GPIO pin number for RST: Default 27  
  -b<pin>        GPIO pin number for BLK: Default 24  
+ -x<sw>         Audio visualizer ON(1)/OFF(0): Default 0  
 ```
 
 ## Acknowledgments
@@ -61,6 +73,7 @@ Options:
 * [st7789 - Rust library for displays using the ST7735 driver](https://github.com/almindor/st7789)
 * [ラズパイで動くバイナリプログラムをRustでクロスコンパイルするための基本手順](https://geek.tacoskingdom.com/blog/64)
 * [回転すると表示位置がずれる件の解決](https://github.com/zephyrproject-rtos/zephyr/issues/32286#issuecomment-990594099)
+* [spectrum-analyzer](https://crates.io/crates/spectrum-analyzer)
 
 ## Author
 

@@ -9,6 +9,7 @@ use image::imageops::FilterType;
 use image::{GenericImageView, Rgba, RgbaImage};
 use imageproc::drawing::{draw_filled_rect_mut, draw_hollow_rect_mut, draw_text_mut};
 use imageproc::rect::Rect;
+use libc::{c_int, c_void, exit};
 use rppal::spi;
 use rppal::{
     gpio::Gpio,
@@ -18,8 +19,13 @@ use rusttype::{point, Font, Scale};
 use serde::Deserialize;
 use serde_aux::prelude::*;
 use serde_with::*;
+use spectrum_analyzer::scaling::divide_by_N;
+use spectrum_analyzer::windows::hann_window;
+use spectrum_analyzer::{samples_fft_to_spectrum, FrequencyLimit};
 use std::{
-    env, fs,
+    env,
+    ffi::CString,
+    fs, ptr,
     str::FromStr,
     thread,
     time::{Duration, Instant},
@@ -97,14 +103,34 @@ const DEF_GPIO_BLK_PIN: u8 = 24;
 
 const SPI_MAXSPEED_HZ: u32 = 48_000_000;
 
+const MPD_FIFO_FILE: &str = "/tmp/snapfifo";
+const MAX_FIFO_WAIT_MILS: u128 = 100u128;
+const FQ: u32 = 44100;
+const DATA_BIT_LEN: usize = 16;
+const FQ_MAX: f64 = 20000.0f64;
+const FQ_MIN: f64 = 50.0f64;
+const NUM_SAMPLES: usize = 1024;
+const CHANNELS: usize = 1;
+
+const SP_X: i32 = 138;
+const SP_Y: i32 = 116;
+const SP_WIDTH: u32 = 108;
+const SP_HEIGHT: u32 = 48;
+
+const SP_BAR_WIDTH: i32 = 4;
+const SP_BAR_MARGIN: i32 = 1;
+const NUM_BARS: usize = 16;
+
 ///
 /// Globals
 ///
 
-static COLOR_BLACK: image::Rgba<u8> = Rgba::<u8>([0u8, 0u8, 0u8, 255u8]);
-static COLOR_WHITE: image::Rgba<u8> = Rgba::<u8>([255u8, 255u8, 255u8, 255u8]);
-static COLOR_GREY: image::Rgba<u8> = Rgba::<u8>([120u8, 120u8, 120u8, 255u8]);
-static COLOR_LIGHTBLUE: image::Rgba<u8> = Rgba::<u8>([176u8, 224u8, 255u8, 255u8]); 
+static COLOR_BLACK: Rgba<u8> = Rgba::<u8>([0u8, 0u8, 0u8, 255u8]);
+static COLOR_WHITE: Rgba<u8> = Rgba::<u8>([255u8, 255u8, 255u8, 255u8]);
+static COLOR_GREY: Rgba<u8> = Rgba::<u8>([120u8, 120u8, 120u8, 255u8]);
+static COLOR_LIGHTBLUE: Rgba<u8> = Rgba::<u8>([176u8, 224u8, 255u8, 255u8]);
+
+static COLOR_SP_BAR: Rgba<u8> = Rgba::<u8>([0u8, 255u8, 120u8, 255u8]);
 
 ///
 /// Data-type definitions.
@@ -160,23 +186,157 @@ impl Default for Info {
     }
 }
 
+/// SpectrumVisualize info
+#[derive(Debug)]
+struct SpInfo {
+    fifo_fd: c_int,
+    in_amp_max: f64,
+    out_amp_max: f64,
+    cut_off: Vec<f64>,
+    signal: Vec<f32>,
+    step_per_msec: f64,
+    input_bytelen: isize,
+    signal16: Vec<u8>,
+}
+
+impl SpInfo {
+    pub fn new(fifo_fd: c_int) -> SpInfo {
+        let mut sp_info = SpInfo {
+            fifo_fd,
+            in_amp_max: 0_f64,
+            out_amp_max: 0_f64,
+            cut_off: vec![0.0f64; NUM_BARS],
+            signal: vec![0.0f32; NUM_SAMPLES],
+            step_per_msec: 1000.0 / (FQ as f64),
+            input_bytelen: (NUM_SAMPLES * CHANNELS * 2) as isize,
+            signal16: vec![0u8; NUM_SAMPLES * CHANNELS * 2],
+        };
+        sp_info.in_amp_max = 2_f64.powf(DATA_BIT_LEN as f64) / 2.0;
+        sp_info.out_amp_max = sp_info.in_amp_max / 2.0 / 2_f64.sqrt();
+
+        let border_unit: f64 = (FQ_MAX.log10() - FQ_MIN.log10()) / (NUM_BARS as f64);
+        for j in 0..NUM_BARS {
+            sp_info.cut_off[j] = 10_f64.powf(FQ_MIN.log10() + border_unit * ((j + 1) as f64));
+        }
+        sp_info
+    }
+
+    pub fn fft(&mut self, bar_vals: &mut [f64]) {
+        let mut left_bytelen: usize = self.input_bytelen as usize;
+        let mut got_bytelen: usize = 0;
+
+        unsafe {
+            let mut read_len: isize;
+            ptr::write_bytes(self.signal16.as_mut_ptr(), 0u8, NUM_SAMPLES * CHANNELS * 2);
+
+            while {
+                // do-while
+                read_len = libc::read(
+                    self.fifo_fd,
+                    self.signal16.as_mut_ptr() as *mut c_void,
+                    left_bytelen,
+                );
+                read_len == self.input_bytelen
+            } {}
+            if (read_len > 0) && (read_len < self.input_bytelen) {
+                // 残りの処理 トータル100msecまで試す(100msec超える場合はきっと切れた)
+                left_bytelen -= read_len as usize;
+                got_bytelen += read_len as usize;
+
+                let now = Instant::now();
+                let mut dur_mils: u128 = 0u128;
+
+                while (left_bytelen > 0) && (dur_mils < MAX_FIFO_WAIT_MILS) {
+                    let interval =
+                        (1.2 * self.step_per_msec * (left_bytelen as f64 / (CHANNELS * 2) as f64))
+                            as u64;
+                    if interval > 0 {
+                        thread::sleep(Duration::from_millis(interval));
+                    }
+                    read_len = libc::read(
+                        self.fifo_fd,
+                        self.signal16[got_bytelen..].as_mut_ptr() as *mut c_void,
+                        left_bytelen,
+                    );
+                    if read_len > 0 {
+                        left_bytelen -= read_len as usize;
+                        got_bytelen += read_len as usize;
+                    }
+                    dur_mils = now.elapsed().as_millis();
+                }
+            }
+        }
+
+        for i in 0..NUM_SAMPLES {
+            let j = i * CHANNELS * 2;
+            // little endian for Intel / Arm
+            self.signal[i] = ((((self.signal16[j + 1] as i16) << 8) & -256i16)
+                | (self.signal16[j] & 0x0ff) as i16) as f32 / 32767.0;
+        }
+
+        let hann_window = hann_window(&self.signal[..]);
+        // calc spectrum
+        let spectrum_hann_window = samples_fft_to_spectrum(
+            // (windowed) samples
+            &hann_window,
+            // sampling rate
+            FQ,
+            // optional frequency limit: e.g. only interested in frequencies 50 <= f <= 150?
+            FrequencyLimit::Range(FQ_MIN as f32, FQ_MAX as f32),
+            //FrequencyLimit::All,
+            // optional scale
+            Some(&divide_by_N),
+        )
+        .unwrap();
+
+        let data = spectrum_hann_window.data();
+        let f_num = data.len();
+
+        let mut i: usize = 0;
+        for (j, bar) in bar_vals.iter_mut().enumerate().take(NUM_BARS) {
+            let mut flg: bool = true;
+            let mut k = 0;
+            *bar = 0.0f64;
+            while {
+                if i < f_num {
+                    let (fr, fr_val) = data[i];
+                    if ((fr.val() as f64) < self.cut_off[j]) || (k == 0) {
+                        *bar += fr_val.val() as f64;
+                        i += 1;
+                        k += 1;
+                    } else {
+                        flg = false;
+                    }
+                } else {
+                    flg = false;
+                }
+                flg
+            } {}
+            // Calc average
+            if k > 0 {
+                *bar /= k as f64;
+            }
+        }
+    }
+}
+
 /// Global status
 #[derive(Debug)]
 pub struct State<'a> {
-    pub pre_info: Info,
-    pub mpd_status_change: bool,
+    pre_info: Info,
+    mpd_status_change: bool,
 
-    pub baseimg: RgbaImage,
+    baseimg: RgbaImage,
 
-    pub title_txt_img: Option<RgbaImage>,
-    pub album_txt_img: Option<RgbaImage>,
-    pub artist_txt_img: Option<RgbaImage>,
+    title_txt_img: Option<RgbaImage>,
+    album_txt_img: Option<RgbaImage>,
+    artist_txt_img: Option<RgbaImage>,
 
-    pub title_x: u32,
-    pub album_x: u32,
-    pub artist_x: u32,
+    title_x: u32,
+    album_x: u32,
+    artist_x: u32,
 
-    pub seek_pos: u32,
+    seek_pos: u32,
 
     scale_xl: Scale,
     scale_l: Scale,
@@ -185,6 +345,8 @@ pub struct State<'a> {
 
     font_i: Font<'a>,
     font_n: Font<'a>,
+
+    bar_vals: Vec<f64>,
 }
 
 impl State<'_> {
@@ -216,6 +378,8 @@ impl State<'_> {
 
             font_i: Font::try_from_vec(fs::read(INFO_FONT).unwrap()).unwrap(),
             font_n: Font::try_from_vec(fs::read(NUM_FONT).unwrap()).unwrap(),
+
+            bar_vals: vec![0.0f64; NUM_BARS],
         }
     }
 }
@@ -288,12 +452,8 @@ fn update_state(mut state: &mut State) -> Result<(), Box<dyn std::error::Error>>
             // Title changed
             if !info.title.eq(&pre_info.title) {
                 state.title_x = 0;
-                state.title_txt_img = get_text_img(
-                    &state.font_i,
-                    &info.title,
-                    state.scale_l,
-                    COLOR_LIGHTBLUE,
-                );
+                state.title_txt_img =
+                    get_text_img(&state.font_i, &info.title, state.scale_l, COLOR_LIGHTBLUE);
                 draw_filled_rect_mut(
                     baseimg,
                     Rect::at(TITLE_INFO_X, TITLE_INFO_Y)
@@ -316,12 +476,8 @@ fn update_state(mut state: &mut State) -> Result<(), Box<dyn std::error::Error>>
             // Artist changed
             if !info.artist.eq(&pre_info.artist) {
                 state.artist_x = 0;
-                state.artist_txt_img = get_text_img(
-                    &state.font_i,
-                    &info.artist,
-                    state.scale_m,
-                    COLOR_WHITE,
-                );
+                state.artist_txt_img =
+                    get_text_img(&state.font_i, &info.artist, state.scale_m, COLOR_WHITE);
                 draw_filled_rect_mut(
                     baseimg,
                     Rect::at(ARTIST_INFO_X, ARTIST_INFO_Y)
@@ -470,7 +626,7 @@ fn draw_clock(state: &mut State) {
 }
 
 /// Update image in playing mode.
-fn draw_music_info(mut state: &mut State) {
+fn draw_music_info(mut state: &mut State, sp: &mut Option<&mut SpInfo>) {
     let mut restart_scroll = true;
     let baseimg = &mut state.baseimg;
 
@@ -545,6 +701,38 @@ fn draw_music_info(mut state: &mut State) {
             state.artist_x = 0;
         }
     }
+
+    // draw_spectrum
+    if let Some(ref mut sp_info) = sp {
+        sp_info.fft(&mut state.bar_vals);
+
+        draw_filled_rect_mut(
+            baseimg,
+            Rect::at(SP_X, SP_Y).of_size(SP_WIDTH, SP_HEIGHT),
+            COLOR_BLACK,
+        );
+        let mut x = SP_X;
+
+        for i in 0..NUM_BARS {
+            // dB + DYNAMIC_RANGE: 90 + GAIN: 10 / DYNAMIC_RANGE
+            let mut y: i32 = (SP_HEIGHT as f64 * (state.bar_vals[i].log10() * 20.0 + 100.0) / 90.0) as i32;
+            if y < 0 {
+                y = 0;
+            } else if y > SP_HEIGHT as i32 {
+                y = SP_HEIGHT as i32;
+            }
+            if y > 0 {
+                draw_filled_rect_mut(
+                    baseimg,
+                    Rect::at(x, (SP_HEIGHT + SP_Y as u32 - y as u32) as i32)
+                        .of_size(SP_BAR_WIDTH as u32, y as u32),
+                    COLOR_SP_BAR,
+                );
+            }
+
+            x += SP_BAR_WIDTH + SP_BAR_MARGIN;
+        }
+    }
 }
 
 /// Output Usage
@@ -555,22 +743,24 @@ fn usage() {
     println!();
     println!("Options:");
     println!(" -s<spi_bus>      SPI bus (0, 1, 2): Default 0");
-    println!(" -c<cs_pin>        Slave Select pin (0, 1, 2): Default 0");
+    println!(" -c<cs_pin>       Slave Select pin (0, 1, 2): Default 0");
     println!("                       spi = 0, cs = 0...GPIO 8, 1...GPIO 7");
     println!("                       spi = 1, cs = 0...GPIO 18, 1...GPIO 17, 2...GIPI16");
     println!("                       spi = 2, cs = 0...GPIO 43, 1...GPIO 44, 2...GIPI45");
-    println!(" -d<pin>           GPIO pin number for DC: Default 25");
+    println!(" -d<pin>          GPIO pin number for DC: Default 25");
     println!(" -r<pin>          GPIO pin number for RST: Default 27");
     println!(" -b<pin>          GPIO pin number for BLK: Default 24");
+    println!(" -x<sw>           Audio visualizer ON(1)/OFF(0): Default 0");
 }
 
 /// Get Command-line parameters.
-fn get_param() -> (u8, u8, u8, u8, u8) {
+fn get_param() -> (u8, u8, u8, u8, u8, u8) {
     let mut spi = DEF_SPI_BUS;
     let mut cs = DEF_CS_PIN;
     let mut dc = DEF_GPIO_DC_PIN;
     let mut rst = DEF_GPIO_RST_PIN;
     let mut blk = DEF_GPIO_BLK_PIN;
+    let mut vz = 0; // Default Off
 
     for arg in env::args() {
         if &arg[0..1] == "-" {
@@ -582,6 +772,7 @@ fn get_param() -> (u8, u8, u8, u8, u8) {
                     "-d" => dc = val,
                     "-r" => rst = val,
                     "-b" => blk = val,
+                    "-x" => vz = val,
                     _ => {
                         usage();
                         panic!()
@@ -594,14 +785,18 @@ fn get_param() -> (u8, u8, u8, u8, u8) {
             };
         }
     }
-    (spi, cs, dc, rst, blk)
+    (spi, cs, dc, rst, blk, vz)
 }
 
 /// Main routine
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let (spi_n, cs_n, dc_n, rst_n, blk_n) = get_param();
+    let (spi_n, cs_n, dc_n, rst_n, blk_n, vz_on) = get_param();
 
     let mut state = State::new();
+
+    #[allow(unused_assignments)]
+    let mut sp_info = SpInfo::new(-1);
+    let mut sp: Option<&mut SpInfo> = None;
 
     let gpio = Gpio::new().expect("Failed Gpio::new");
     let dc_pin = gpio.get(dc_n)?.into_output();
@@ -632,6 +827,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Display
     st7789.init().unwrap();
 
+    // for Spectrum Visualizer
+    if vz_on > 0 {
+        let fifo_fd: c_int;
+        unsafe {
+            let file_name = CString::new(MPD_FIFO_FILE).unwrap();
+            fifo_fd = libc::open(file_name.as_ptr(), libc::O_RDONLY | libc::O_NONBLOCK);
+            if fifo_fd == -1 {
+                exit(1);
+            }
+        }
+        sp_info = SpInfo::new(fifo_fd);
+        sp = Some(&mut sp_info);
+    }
+
     let mut is_first = true;
     let mut now_t = Instant::now();
     let mut pre_t = now_t;
@@ -646,7 +855,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let _ = update_state(&mut state);
         }
         let interval = if state.pre_info.status.eq("play") {
-            draw_music_info(&mut state);
+            draw_music_info(&mut state, &mut sp);
             DISP_INTERVAL_MSEC
         } else {
             draw_clock(&mut state);
