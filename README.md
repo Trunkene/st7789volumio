@@ -28,14 +28,23 @@ ST7789(240x240) viewer for Volumio on Raspberry Pi
 dtparam=spi=on
 ```
 
-* Audio VisualizerをONにする場合(起動パラメータ -x1)、/volumio/app/plugins/music_service/mpd/mpd.conf.tmplに下記を変更。
+* Audio VisualizerをONにする場合(起動パラメータ -x1)、/volumio/app/plugins/music_service/mpd/mpd.conf.tmplに下記を変更。  
 変更後、再起動。
+
 ```
 audio_output {
-    type      "fifo"
-    enabled   "yes"
-    path      "/tmp/snapfifo"
-    format    "44100:16:1"
+    type         "alsa"
+    <途中略>
+    buffer_time  "50000"
+    period_time  "12500"
+}
+ <途中略>
+audio_output {
+    type         "fifo"
+    <途中略>
+    enabled      "yes"
+    path         "/tmp/snapfifo"
+    format       "44100:16:1"
 }
 ```
 
@@ -73,7 +82,9 @@ Options:
 * [st7789 - Rust library for displays using the ST7735 driver](https://github.com/almindor/st7789)
 * [ラズパイで動くバイナリプログラムをRustでクロスコンパイルするための基本手順](https://geek.tacoskingdom.com/blog/64)
 * [回転すると表示位置がずれる件の解決](https://github.com/zephyrproject-rtos/zephyr/issues/32286#issuecomment-990594099)
-* [spectrum-analyzer](https://crates.io/crates/spectrum-analyzer)
+* [CAVA - Cross-platform Audio Visualizer](https://github.com/karlstav/cava)
+* [Rust library for frequency spectrum analysis using FFT](https://crates.io/crates/spectrum-analyzer)
+* [ncmpcpp - NCurses Music Player Client](https://github.com/ncmpcpp/ncmpcpp)
 
 ## Author
 
