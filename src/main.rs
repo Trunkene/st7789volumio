@@ -188,7 +188,7 @@ impl Default for Info {
 
 /// SpectrumVisualize info
 #[derive(Debug)]
-struct SpInfo {
+pub struct SpInfo {
     fifo_fd: c_int,
     in_amp_max: f64,
     out_amp_max: f64,
@@ -271,7 +271,8 @@ impl SpInfo {
             let j = i * CHANNELS * 2;
             // little endian for Intel / Arm
             self.signal[i] = ((((self.signal16[j + 1] as i16) << 8) & -256i16)
-                | (self.signal16[j] & 0x0ff) as i16) as f32 / 32767.0;
+                | (self.signal16[j] & 0x0ff) as i16) as f32
+                / 32767.0;
         }
 
         let hann_window = hann_window(&self.signal[..]);
@@ -382,359 +383,369 @@ impl State<'_> {
             bar_vals: vec![0.0f64; NUM_BARS],
         }
     }
-}
 
-/// Calc horizontal and vertical size for text to be draw.
-/// only for single line text.
-fn calc_text_size(font: &Font, text: &str, scale: Scale) -> (u32, u32) {
-    if text.is_empty() {
-        (0u32, 0u32)
-    } else {
-        let v_metrics = font.v_metrics(scale);
-        let glyphs: Vec<_> = font.layout(text, scale, point(0.0, 0.0)).collect();
-        let glyphs_height = (v_metrics.ascent - v_metrics.descent).ceil() as u32;
-        let glyphs_width = {
-            let max_x = glyphs
-                .last()
-                .map(|g| g.pixel_bounding_box().unwrap().max.x)
-                .unwrap();
-            max_x as u32
-        };
-        (glyphs_width, glyphs_height)
-    }
-}
-
-/// Get image for text.
-fn get_text_img(font: &Font, text: &str, scale: Scale, col: image::Rgba<u8>) -> Option<RgbaImage> {
-    if text.is_empty() {
-        None
-    } else {
-        let t_w: u32;
-        let t_h: u32;
-
-        // Title text image
-        (t_w, t_h) = calc_text_size(font, text, scale);
-
-        let w = if t_w <= DISP_AREA_WIDTH {
-            t_w
+    /// Calc horizontal and vertical size for text to be draw.
+    /// only for single line text.
+    fn calc_text_size(font: &Font, text: &str, scale: Scale) -> (u32, u32) {
+        if text.is_empty() {
+            (0u32, 0u32)
         } else {
-            t_w + 20 + DISP_AREA_WIDTH
-        };
-        let mut img = RgbaImage::new(w, t_h);
-        draw_filled_rect_mut(&mut img, Rect::at(0, 0).of_size(w, t_h), COLOR_BLACK);
-        draw_text_mut(&mut img, col, 0, 0, scale, font, text);
-        if t_w > DISP_AREA_WIDTH {
-            draw_text_mut(&mut img, col, t_w + 20, 0, scale, font, text);
+            let v_metrics = font.v_metrics(scale);
+            let glyphs: Vec<_> = font.layout(text, scale, point(0.0, 0.0)).collect();
+            let glyphs_height = (v_metrics.ascent - v_metrics.descent).ceil() as u32;
+            let glyphs_width = {
+                let max_x = glyphs
+                    .last()
+                    .map(|g| g.pixel_bounding_box().unwrap().max.x)
+                    .unwrap();
+                max_x as u32
+            };
+            (glyphs_width, glyphs_height)
         }
-        Some(img)
     }
-}
 
-/// Get Information from Volumio.
-fn update_state(mut state: &mut State) -> Result<(), Box<dyn std::error::Error>> {
-    // get MDP status
-    if let Ok(res) = reqwest::blocking::get(format!("{MDP_BASE_URL}{GET_STATE_API}")) {
-        if let Ok(info) = res.json::<Info>() {
-            let baseimg = &mut state.baseimg;
-            let pre_info = &mut state.pre_info;
+    /// Get image for text.
+    fn get_text_img(
+        font: &Font,
+        text: &str,
+        scale: Scale,
+        col: image::Rgba<u8>,
+    ) -> Option<RgbaImage> {
+        if text.is_empty() {
+            None
+        } else {
+            let t_w: u32;
+            let t_h: u32;
 
-            if !info.status.eq(&pre_info.status) {
-                draw_filled_rect_mut(
-                    baseimg,
-                    Rect::at(DISP_AREA_MARGIN_X, DISP_AREA_MARGIN_Y)
-                        .of_size(DISP_AREA_WIDTH, DISP_AREA_HEIGHT),
-                    COLOR_BLACK,
-                );
+            // Title text image
+            (t_w, t_h) = Self::calc_text_size(font, text, scale);
 
-                state.mpd_status_change = true;
+            let w = if t_w <= DISP_AREA_WIDTH {
+                t_w
+            } else {
+                t_w + 20 + DISP_AREA_WIDTH
+            };
+            let mut img = RgbaImage::new(w, t_h);
+            draw_filled_rect_mut(&mut img, Rect::at(0, 0).of_size(w, t_h), COLOR_BLACK);
+            draw_text_mut(&mut img, col, 0, 0, scale, font, text);
+            if t_w > DISP_AREA_WIDTH {
+                draw_text_mut(&mut img, col, t_w + 20, 0, scale, font, text);
             }
+            Some(img)
+        }
+    }
 
-            // Title changed
-            if !info.title.eq(&pre_info.title) {
-                state.title_x = 0;
-                state.title_txt_img =
-                    get_text_img(&state.font_i, &info.title, state.scale_l, COLOR_LIGHTBLUE);
-                draw_filled_rect_mut(
-                    baseimg,
-                    Rect::at(TITLE_INFO_X, TITLE_INFO_Y)
-                        .of_size(TITLE_INFO_WIDTH, TITLE_INFO_HEIGHT),
-                    COLOR_BLACK,
-                );
-            }
-            // Album changed
-            if !info.album.eq(&pre_info.album) {
-                state.album_x = 0;
-                state.album_txt_img =
-                    get_text_img(&state.font_i, &info.album, state.scale_m, COLOR_WHITE);
-                draw_filled_rect_mut(
-                    baseimg,
-                    Rect::at(ALBUM_INFO_X, ALBUM_INFO_Y)
-                        .of_size(ALBUM_INFO_WIDTH, ALBUM_INFO_HEIGHT),
-                    COLOR_BLACK,
-                );
-            }
-            // Artist changed
-            if !info.artist.eq(&pre_info.artist) {
-                state.artist_x = 0;
-                state.artist_txt_img =
-                    get_text_img(&state.font_i, &info.artist, state.scale_m, COLOR_WHITE);
-                draw_filled_rect_mut(
-                    baseimg,
-                    Rect::at(ARTIST_INFO_X, ARTIST_INFO_Y)
-                        .of_size(ARTIST_INFO_WIDTH, ARTIST_INFO_HEIGHT),
-                    COLOR_BLACK,
-                );
-            }
-            // Albumart changed
-            if !info.albumart.eq(&pre_info.albumart) || state.mpd_status_change {
-                // Thumbnail
-                let img_bytes = if info.albumart.starts_with("http") {
-                    reqwest::blocking::get(info.albumart.to_string())?.bytes()?
-                } else {
-                    reqwest::blocking::get(format!("{}{}", MDP_BASE_URL, &info.albumart))?
-                        .bytes()?
-                };
-                let img = image::load_from_memory(&img_bytes).unwrap();
+    /// Get Information from Volumio.
+    pub fn update_state(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        // get MDP status
+        if let Ok(res) = reqwest::blocking::get(format!("{MDP_BASE_URL}{GET_STATE_API}")) {
+            if let Ok(info) = res.json::<Info>() {
+                let baseimg = &mut self.baseimg;
+                let pre_info = &mut self.pre_info;
 
-                let resized_img = img.resize(THUMB_WIDTH, THUMB_HEIGHT, FilterType::Triangle);
-
-                let x_of: i32 = if resized_img.width() >= THUMB_WIDTH {
-                    0
-                } else {
-                    ((THUMB_WIDTH - resized_img.width()) / 2) as i32
-                };
-                let y_of: i32 = if resized_img.height() >= THUMB_HEIGHT {
-                    0
-                } else {
-                    ((THUMB_HEIGHT - resized_img.height()) / 2) as i32
-                };
-                imageops::overlay(
-                    baseimg,
-                    &resized_img,
-                    (THUMB_X + x_of) as u32,
-                    (THUMB_Y + y_of) as u32,
-                );
-                draw_hollow_rect_mut(
-                    baseimg,
-                    Rect::at(THUMB_X, THUMB_Y).of_size(THUMB_WIDTH, THUMB_HEIGHT),
-                    COLOR_WHITE,
-                );
-            }
-            // SampleRate/BitDepth/Channels
-            if let Some(sr) = info.samplerate.split_whitespace().next() {
-                let sr0 = format!("{:.0}", f64::from_str(sr)? * 1000.0);
-                if let Some(bd) = info.bitdepth.split_whitespace().next() {
-                    let s = format!("{}:{}:{}", sr0, bd, info.channels);
+                if !info.status.eq(&pre_info.status) {
                     draw_filled_rect_mut(
                         baseimg,
-                        Rect::at(AUDIO_X, AUDIO_Y).of_size(AUDIO_WIDTH, AUDIO_HEIGHT),
+                        Rect::at(DISP_AREA_MARGIN_X, DISP_AREA_MARGIN_Y)
+                            .of_size(DISP_AREA_WIDTH, DISP_AREA_HEIGHT),
                         COLOR_BLACK,
                     );
-                    draw_text_mut(
-                        baseimg,
-                        COLOR_WHITE,
-                        AUDIO_X as u32,
-                        AUDIO_Y as u32,
-                        state.scale_s,
-                        &state.font_n,
-                        &s,
-                    );
-                }
-            }
 
-            // Seek bar
-            let seek_pos = if info.duration > 0 {
-                SEEK_WIDTH * info.seek / (info.duration * 1000)
-            } else {
-                0
-            };
-            if (seek_pos != state.seek_pos) || state.mpd_status_change {
-                draw_filled_rect_mut(
-                    baseimg,
-                    Rect::at(SEEK_X, SEEK_Y).of_size(SEEK_WIDTH, SEEK_HEIGHT),
-                    COLOR_GREY,
-                );
-                if seek_pos > 0 {
+                    self.mpd_status_change = true;
+                }
+
+                // Title changed
+                if !info.title.eq(&pre_info.title) {
+                    self.title_x = 0;
+                    self.title_txt_img = Self::get_text_img(
+                        &self.font_i,
+                        &info.title,
+                        self.scale_l,
+                        COLOR_LIGHTBLUE,
+                    );
                     draw_filled_rect_mut(
                         baseimg,
-                        Rect::at(SEEK_X, SEEK_Y).of_size(seek_pos, SEEK_HEIGHT),
+                        Rect::at(TITLE_INFO_X, TITLE_INFO_Y)
+                            .of_size(TITLE_INFO_WIDTH, TITLE_INFO_HEIGHT),
+                        COLOR_BLACK,
+                    );
+                }
+                // Album changed
+                if !info.album.eq(&pre_info.album) {
+                    self.album_x = 0;
+                    self.album_txt_img =
+                        Self::get_text_img(&self.font_i, &info.album, self.scale_m, COLOR_WHITE);
+                    draw_filled_rect_mut(
+                        baseimg,
+                        Rect::at(ALBUM_INFO_X, ALBUM_INFO_Y)
+                            .of_size(ALBUM_INFO_WIDTH, ALBUM_INFO_HEIGHT),
+                        COLOR_BLACK,
+                    );
+                }
+                // Artist changed
+                if !info.artist.eq(&pre_info.artist) {
+                    self.artist_x = 0;
+                    self.artist_txt_img =
+                        Self::get_text_img(&self.font_i, &info.artist, self.scale_m, COLOR_WHITE);
+                    draw_filled_rect_mut(
+                        baseimg,
+                        Rect::at(ARTIST_INFO_X, ARTIST_INFO_Y)
+                            .of_size(ARTIST_INFO_WIDTH, ARTIST_INFO_HEIGHT),
+                        COLOR_BLACK,
+                    );
+                }
+                // Albumart changed
+                if !info.albumart.eq(&pre_info.albumart) || self.mpd_status_change {
+                    // Thumbnail
+                    let img_bytes = if info.albumart.starts_with("http") {
+                        reqwest::blocking::get(info.albumart.to_string())?.bytes()?
+                    } else {
+                        reqwest::blocking::get(format!("{}{}", MDP_BASE_URL, &info.albumart))?
+                            .bytes()?
+                    };
+                    let img = image::load_from_memory(&img_bytes).unwrap();
+
+                    let resized_img = img.resize(THUMB_WIDTH, THUMB_HEIGHT, FilterType::Triangle);
+
+                    let x_of: i32 = if resized_img.width() >= THUMB_WIDTH {
+                        0
+                    } else {
+                        ((THUMB_WIDTH - resized_img.width()) / 2) as i32
+                    };
+                    let y_of: i32 = if resized_img.height() >= THUMB_HEIGHT {
+                        0
+                    } else {
+                        ((THUMB_HEIGHT - resized_img.height()) / 2) as i32
+                    };
+                    imageops::overlay(
+                        baseimg,
+                        &resized_img,
+                        (THUMB_X + x_of) as u32,
+                        (THUMB_Y + y_of) as u32,
+                    );
+                    draw_hollow_rect_mut(
+                        baseimg,
+                        Rect::at(THUMB_X, THUMB_Y).of_size(THUMB_WIDTH, THUMB_HEIGHT),
                         COLOR_WHITE,
                     );
                 }
-                state.seek_pos = seek_pos;
-            }
-
-            // CPU temperature
-            let temp = match fs::read_to_string(CPU_THM_FILE) {
-                Ok(temp) => {
-                    let n: f32 = temp.trim().parse::<f32>().unwrap() / 1000.0f32;
-                    format!("CPU {n:.1} C")
+                // SampleRate/BitDepth/Channels
+                if let Some(sr) = info.samplerate.split_whitespace().next() {
+                    let sr0 = format!("{:.0}", f64::from_str(sr)? * 1000.0);
+                    if let Some(bd) = info.bitdepth.split_whitespace().next() {
+                        let s = format!("{}:{}:{}", sr0, bd, info.channels);
+                        draw_filled_rect_mut(
+                            baseimg,
+                            Rect::at(AUDIO_X, AUDIO_Y).of_size(AUDIO_WIDTH, AUDIO_HEIGHT),
+                            COLOR_BLACK,
+                        );
+                        draw_text_mut(
+                            baseimg,
+                            COLOR_WHITE,
+                            AUDIO_X as u32,
+                            AUDIO_Y as u32,
+                            self.scale_s,
+                            &self.font_n,
+                            &s,
+                        );
+                    }
                 }
-                Err(_) => "CPU --.- C".to_string(),
-            };
-            draw_filled_rect_mut(
-                baseimg,
-                Rect::at(CPU_THM_X, CPU_THM_Y).of_size(CPU_THM_WIDTH, CPU_THM_HEIGHT),
-                COLOR_BLACK,
-            );
-            draw_text_mut(
-                baseimg,
-                COLOR_WHITE,
-                CPU_THM_X as u32,
-                CPU_THM_Y as u32,
-                state.scale_s,
-                &state.font_n,
-                &temp,
-            );
 
-            // backup info
-            *pre_info = info;
-            state.mpd_status_change = false;
-        }
-    }
-    Ok(())
-}
+                // Seek bar
+                let seek_pos = if info.duration > 0 {
+                    SEEK_WIDTH * info.seek / (info.duration * 1000)
+                } else {
+                    0
+                };
+                if (seek_pos != self.seek_pos) || self.mpd_status_change {
+                    draw_filled_rect_mut(
+                        baseimg,
+                        Rect::at(SEEK_X, SEEK_Y).of_size(SEEK_WIDTH, SEEK_HEIGHT),
+                        COLOR_GREY,
+                    );
+                    if seek_pos > 0 {
+                        draw_filled_rect_mut(
+                            baseimg,
+                            Rect::at(SEEK_X, SEEK_Y).of_size(seek_pos, SEEK_HEIGHT),
+                            COLOR_WHITE,
+                        );
+                    }
+                    self.seek_pos = seek_pos;
+                }
 
-/// Update image in clock mode.
-fn draw_clock(state: &mut State) {
-    let baseimg = &mut state.baseimg;
-    let dt = Local::now();
+                // CPU temperature
+                let temp = match fs::read_to_string(CPU_THM_FILE) {
+                    Ok(temp) => {
+                        let n: f32 = temp.trim().parse::<f32>().unwrap() / 1000.0f32;
+                        format!("CPU {n:.1} C")
+                    }
+                    Err(_) => "CPU --.- C".to_string(),
+                };
+                draw_filled_rect_mut(
+                    baseimg,
+                    Rect::at(CPU_THM_X, CPU_THM_Y).of_size(CPU_THM_WIDTH, CPU_THM_HEIGHT),
+                    COLOR_BLACK,
+                );
+                draw_text_mut(
+                    baseimg,
+                    COLOR_WHITE,
+                    CPU_THM_X as u32,
+                    CPU_THM_Y as u32,
+                    self.scale_s,
+                    &self.font_n,
+                    &temp,
+                );
 
-    draw_filled_rect_mut(
-        baseimg,
-        Rect::at(DISP_AREA_MARGIN_X, DISP_AREA_MARGIN_Y).of_size(DISP_AREA_WIDTH, DISP_AREA_HEIGHT),
-        COLOR_BLACK,
-    );
-    draw_text_mut(
-        baseimg,
-        COLOR_WHITE,
-        DATE_INFO_X as u32,
-        DATE_INFO_Y as u32,
-        state.scale_m,
-        &state.font_n,
-        &dt.format("%a %m-%d-%Y").to_string(),
-    );
-    draw_text_mut(
-        baseimg,
-        COLOR_WHITE,
-        TIME_INFO_X as u32,
-        TIME_INFO_Y as u32,
-        state.scale_xl,
-        &state.font_n,
-        &dt.format("%H:%M").to_string(),
-    );
-}
-
-/// Update image in playing mode.
-fn draw_music_info(mut state: &mut State, sp: &mut Option<&mut SpInfo>) {
-    let mut restart_scroll = true;
-    let baseimg = &mut state.baseimg;
-
-    if let Some(ref mut title_txt_img) = state.title_txt_img {
-        let title_x = state.title_x;
-        if title_txt_img.width() > DISP_AREA_WIDTH {
-            let h0 = title_txt_img.height();
-            let img0 = imageops::crop(title_txt_img, title_x, 0, DISP_AREA_WIDTH, h0);
-            imageops::overlay(baseimg, &img0, TITLE_INFO_X as u32, TITLE_INFO_Y as u32);
-
-            if title_x < title_txt_img.width() - DISP_AREA_WIDTH {
-                state.title_x = title_x + 1;
-
-                restart_scroll = false;
+                // backup info
+                *pre_info = info;
+                self.mpd_status_change = false;
             }
-        } else {
-            imageops::overlay(
-                baseimg,
-                title_txt_img,
-                TITLE_INFO_X as u32,
-                TITLE_INFO_Y as u32,
-            );
         }
+        Ok(())
     }
 
-    if let Some(ref mut album_txt_img) = state.album_txt_img {
-        let album_x = state.album_x;
-        if album_txt_img.width() > DISP_AREA_WIDTH {
-            let h0 = album_txt_img.height();
-            let img0 = imageops::crop(album_txt_img, album_x, 0, DISP_AREA_WIDTH, h0);
-            imageops::overlay(baseimg, &img0, ALBUM_INFO_X as u32, ALBUM_INFO_Y as u32);
-
-            if album_x < album_txt_img.width() - DISP_AREA_WIDTH {
-                state.album_x = album_x + 1;
-
-                restart_scroll = false;
-            }
-        } else {
-            imageops::overlay(
-                baseimg,
-                album_txt_img,
-                ALBUM_INFO_X as u32,
-                ALBUM_INFO_Y as u32,
-            );
-        }
-    }
-
-    if let Some(ref mut artist_txt_img) = state.artist_txt_img {
-        let artist_x = state.artist_x;
-        if artist_txt_img.width() > DISP_AREA_WIDTH {
-            let h0 = artist_txt_img.height();
-            let img0 = imageops::crop(artist_txt_img, artist_x, 0, DISP_AREA_WIDTH, h0);
-            imageops::overlay(baseimg, &img0, ARTIST_INFO_X as u32, ARTIST_INFO_Y as u32);
-
-            if artist_x < artist_txt_img.width() - DISP_AREA_WIDTH {
-                state.artist_x = artist_x + 1;
-
-                restart_scroll = false;
-            }
-        } else {
-            imageops::overlay(
-                baseimg,
-                artist_txt_img,
-                ARTIST_INFO_X as u32,
-                ARTIST_INFO_Y as u32,
-            );
-        }
-
-        if restart_scroll {
-            state.title_x = 0;
-            state.album_x = 0;
-            state.artist_x = 0;
-        }
-    }
-
-    // draw_spectrum
-    if let Some(ref mut sp_info) = sp {
-        sp_info.fft(&mut state.bar_vals);
+    /// Update image in clock mode.
+    pub fn draw_clock(&mut self) {
+        let baseimg = &mut self.baseimg;
+        let dt = Local::now();
 
         draw_filled_rect_mut(
             baseimg,
-            Rect::at(SP_X, SP_Y).of_size(SP_WIDTH, SP_HEIGHT),
+            Rect::at(DISP_AREA_MARGIN_X, DISP_AREA_MARGIN_Y)
+                .of_size(DISP_AREA_WIDTH, DISP_AREA_HEIGHT),
             COLOR_BLACK,
         );
-        let mut x = SP_X;
+        draw_text_mut(
+            baseimg,
+            COLOR_WHITE,
+            DATE_INFO_X as u32,
+            DATE_INFO_Y as u32,
+            self.scale_m,
+            &self.font_n,
+            &dt.format("%a %m-%d-%Y").to_string(),
+        );
+        draw_text_mut(
+            baseimg,
+            COLOR_WHITE,
+            TIME_INFO_X as u32,
+            TIME_INFO_Y as u32,
+            self.scale_xl,
+            &self.font_n,
+            &dt.format("%H:%M").to_string(),
+        );
+    }
 
-        for i in 0..NUM_BARS {
-            // dB + DYNAMIC_RANGE: 90 + GAIN: 10 / DYNAMIC_RANGE
-            let mut y: i32 = (SP_HEIGHT as f64 * (state.bar_vals[i].log10() * 20.0 + 100.0) / 90.0) as i32;
-            if y < 0 {
-                y = 0;
-            } else if y > SP_HEIGHT as i32 {
-                y = SP_HEIGHT as i32;
-            }
-            if y > 0 {
-                draw_filled_rect_mut(
+    /// Update image in playing mode.
+    pub fn draw_music_info(&mut self, sp: &mut Option<&mut SpInfo>) {
+        let mut restart_scroll = true;
+        let baseimg = &mut self.baseimg;
+
+        if let Some(ref mut title_txt_img) = self.title_txt_img {
+            let title_x = self.title_x;
+            if title_txt_img.width() > DISP_AREA_WIDTH {
+                let h0 = title_txt_img.height();
+                let img0 = imageops::crop(title_txt_img, title_x, 0, DISP_AREA_WIDTH, h0);
+                imageops::overlay(baseimg, &img0, TITLE_INFO_X as u32, TITLE_INFO_Y as u32);
+
+                if title_x < title_txt_img.width() - DISP_AREA_WIDTH {
+                    self.title_x = title_x + 1;
+
+                    restart_scroll = false;
+                }
+            } else {
+                imageops::overlay(
                     baseimg,
-                    Rect::at(x, (SP_HEIGHT + SP_Y as u32 - y as u32) as i32)
-                        .of_size(SP_BAR_WIDTH as u32, y as u32),
-                    COLOR_SP_BAR,
+                    title_txt_img,
+                    TITLE_INFO_X as u32,
+                    TITLE_INFO_Y as u32,
+                );
+            }
+        }
+
+        if let Some(ref mut album_txt_img) = self.album_txt_img {
+            let album_x = self.album_x;
+            if album_txt_img.width() > DISP_AREA_WIDTH {
+                let h0 = album_txt_img.height();
+                let img0 = imageops::crop(album_txt_img, album_x, 0, DISP_AREA_WIDTH, h0);
+                imageops::overlay(baseimg, &img0, ALBUM_INFO_X as u32, ALBUM_INFO_Y as u32);
+
+                if album_x < album_txt_img.width() - DISP_AREA_WIDTH {
+                    self.album_x = album_x + 1;
+
+                    restart_scroll = false;
+                }
+            } else {
+                imageops::overlay(
+                    baseimg,
+                    album_txt_img,
+                    ALBUM_INFO_X as u32,
+                    ALBUM_INFO_Y as u32,
+                );
+            }
+        }
+
+        if let Some(ref mut artist_txt_img) = self.artist_txt_img {
+            let artist_x = self.artist_x;
+            if artist_txt_img.width() > DISP_AREA_WIDTH {
+                let h0 = artist_txt_img.height();
+                let img0 = imageops::crop(artist_txt_img, artist_x, 0, DISP_AREA_WIDTH, h0);
+                imageops::overlay(baseimg, &img0, ARTIST_INFO_X as u32, ARTIST_INFO_Y as u32);
+
+                if artist_x < artist_txt_img.width() - DISP_AREA_WIDTH {
+                    self.artist_x = artist_x + 1;
+
+                    restart_scroll = false;
+                }
+            } else {
+                imageops::overlay(
+                    baseimg,
+                    artist_txt_img,
+                    ARTIST_INFO_X as u32,
+                    ARTIST_INFO_Y as u32,
                 );
             }
 
-            x += SP_BAR_WIDTH + SP_BAR_MARGIN;
+            if restart_scroll {
+                self.title_x = 0;
+                self.album_x = 0;
+                self.artist_x = 0;
+            }
+        }
+
+        // draw_spectrum
+        if let Some(ref mut sp_info) = sp {
+            sp_info.fft(&mut self.bar_vals);
+
+            draw_filled_rect_mut(
+                baseimg,
+                Rect::at(SP_X, SP_Y).of_size(SP_WIDTH, SP_HEIGHT),
+                COLOR_BLACK,
+            );
+            let mut x = SP_X;
+
+            for i in 0..NUM_BARS {
+                // dB + DYNAMIC_RANGE: 90 + GAIN: 10 / DYNAMIC_RANGE
+                let mut y: i32 =
+                    (SP_HEIGHT as f64 * (self.bar_vals[i].log10() * 20.0 + 100.0) / 90.0) as i32;
+                if y < 0 {
+                    y = 0;
+                } else if y > SP_HEIGHT as i32 {
+                    y = SP_HEIGHT as i32;
+                }
+                if y > 0 {
+                    draw_filled_rect_mut(
+                        baseimg,
+                        Rect::at(x, (SP_HEIGHT + SP_Y as u32 - y as u32) as i32)
+                            .of_size(SP_BAR_WIDTH as u32, y as u32),
+                        COLOR_SP_BAR,
+                    );
+                }
+
+                x += SP_BAR_WIDTH + SP_BAR_MARGIN;
+            }
         }
     }
 }
-
 /// Output Usage
 fn usage() {
     println!("st7789volumio");
@@ -852,13 +863,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if dur.as_secs() > INFO_INTERVAL_SEC || is_first {
             pre_t = now_t;
             is_first = false;
-            let _ = update_state(&mut state);
+            let _ = state.update_state();
         }
         let interval = if state.pre_info.status.eq("play") {
-            draw_music_info(&mut state, &mut sp);
+            state.draw_music_info(&mut sp);
             DISP_INTERVAL_MSEC
         } else {
-            draw_clock(&mut state);
+            state.draw_clock();
             CLOCK_INTERVAL_MSEC
         };
 
