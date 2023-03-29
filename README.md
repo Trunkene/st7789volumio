@@ -11,6 +11,9 @@ ST7789(240x240) viewer for Volumio on Raspberry Pi
 
 ちなみに動作はAliExpressで数百円で購入した1.3インチ240x240のTFTディスプレイでのみ行っています。
 
++ 2023/03/29 Visualizerの音ズレをプログラム側で解消.mpd.confのalsaのbuffer_time変更不要に.
++ 2023/03.07 Audio Visualizerを追加
+
 ## Requirement
 * volumio (3で確認)
 * フォント: (自分の好きなフォントでソースを書き換えてください)  
@@ -32,13 +35,6 @@ dtparam=spi=on
 変更後、再起動。
 
 ```
-audio_output {
-    type         "alsa"
-    <途中略>
-    buffer_time  "50000"
-    period_time  "12500"
-}
- <途中略>
 audio_output {
     type         "fifo"
     <途中略>
@@ -75,6 +71,8 @@ Options:
  -r<pin>        GPIO pin number for RST: Default 27  
  -b<pin>        GPIO pin number for BLK: Default 24  
  -x<sw>         Audio visualizer ON(1)/OFF(0): Default 0  
+ -t<offset>     Vizualizer offset millisec(0-1000): Default 500
+                    Effective only as -x1 specified
 ```
 
 ## Acknowledgments

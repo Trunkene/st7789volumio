@@ -25,7 +25,7 @@ use spectrum_analyzer::{samples_fft_to_spectrum, FrequencyLimit};
 use std::{
     env,
     ffi::CString,
-    fs, ptr,
+    fs,
     str::FromStr,
     thread,
     time::{Duration, Instant},
@@ -104,7 +104,6 @@ const DEF_GPIO_BLK_PIN: u8 = 24;
 const SPI_MAXSPEED_HZ: u32 = 48_000_000;
 
 const MPD_FIFO_FILE: &str = "/tmp/snapfifo";
-const MAX_FIFO_WAIT_MILS: u128 = 100u128;
 const FQ: u32 = 44100;
 const DATA_BIT_LEN: usize = 16;
 const FQ_MAX: f64 = 20000.0f64;
@@ -120,6 +119,9 @@ const SP_HEIGHT: u32 = 48;
 const SP_BAR_WIDTH: i32 = 4;
 const SP_BAR_MARGIN: i32 = 1;
 const NUM_BARS: usize = 16;
+
+const SIGNAL16_BUFFLEN: usize = FQ as usize;
+const DEF_VZ_OFFSET: u32 = 500; // Default 500msec
 
 ///
 /// Globals
@@ -186,6 +188,57 @@ impl Default for Info {
     }
 }
 
+/// RingBuffer for Signal (Capacity 1sec)
+#[derive(Debug)]
+pub struct RingSignal16Buffer {
+    capacity: i32,
+    tail: i32,
+    length: i32,
+    buffer: Vec<u8>,
+}
+
+impl RingSignal16Buffer {
+    pub fn new(max_entry: usize) -> RingSignal16Buffer {
+        RingSignal16Buffer {
+            capacity: (max_entry * 2) as i32, // for 16bit (2byte)
+            tail: 0,
+            length: 0,
+            buffer: vec![0u8; max_entry * 2],
+        }
+    }
+
+    /// Clean up
+    pub fn clean(&mut self) {
+        self.tail = 0;
+        self.length = 0;
+    }
+
+    /// Get max length to read once
+    pub fn once_readable_len(&mut self) -> i32 {
+        self.capacity - self.tail
+    }
+
+    /// Adjust after read to buffer
+    pub fn after_read(&mut self, read_bytes: i32) {
+        if self.length < self.capacity {
+            self.length += read_bytes;
+            if self.length > self.capacity {
+                self.length = self.capacity;
+            }
+        }
+        self.tail = (self.tail + read_bytes) % self.capacity;
+    }
+
+    /// Get buffer position before entry_num
+    pub fn before_pos(&mut self, entry_num: i32) -> Option<i32> {
+        if (entry_num <= self.length) && (entry_num <= self.capacity) {
+            Some((self.capacity + self.tail - entry_num * 2) % self.capacity)
+        } else {
+            None
+        }
+    }
+}
+
 /// SpectrumVisualize info
 #[derive(Debug)]
 pub struct SpInfo {
@@ -194,22 +247,25 @@ pub struct SpInfo {
     out_amp_max: f64,
     cut_off: Vec<f64>,
     signal: Vec<f32>,
-    step_per_msec: f64,
-    input_bytelen: isize,
-    signal16: Vec<u8>,
+    signal16buff: RingSignal16Buffer,
+    offset: u32,
 }
 
 impl SpInfo {
-    pub fn new(fifo_fd: c_int) -> SpInfo {
+    pub fn new(fifo_fd: c_int, offset_msec: u32) -> SpInfo {
+        let mut offset: u32 = offset_msec * FQ / 1000;
+        if offset > SIGNAL16_BUFFLEN as u32 {
+            offset = SIGNAL16_BUFFLEN as u32;
+        }
+
         let mut sp_info = SpInfo {
             fifo_fd,
             in_amp_max: 0_f64,
             out_amp_max: 0_f64,
             cut_off: vec![0.0f64; NUM_BARS],
             signal: vec![0.0f32; NUM_SAMPLES],
-            step_per_msec: 1000.0 / (FQ as f64),
-            input_bytelen: (NUM_SAMPLES * CHANNELS * 2) as isize,
-            signal16: vec![0u8; NUM_SAMPLES * CHANNELS * 2],
+            signal16buff: { RingSignal16Buffer::new(SIGNAL16_BUFFLEN * CHANNELS) },
+            offset,
         };
         sp_info.in_amp_max = 2_f64.powf(DATA_BIT_LEN as f64) / 2.0;
         sp_info.out_amp_max = sp_info.in_amp_max / 2.0 / 2_f64.sqrt();
@@ -222,57 +278,42 @@ impl SpInfo {
     }
 
     pub fn fft(&mut self, bar_vals: &mut [f64]) {
-        let mut left_bytelen: usize = self.input_bytelen as usize;
-        let mut got_bytelen: usize = 0;
-
         unsafe {
             let mut read_len: isize;
-            ptr::write_bytes(self.signal16.as_mut_ptr(), 0u8, NUM_SAMPLES * CHANNELS * 2);
 
             while {
+                let readable_len = self.signal16buff.once_readable_len();
+
                 // do-while
                 read_len = libc::read(
                     self.fifo_fd,
-                    self.signal16.as_mut_ptr() as *mut c_void,
-                    left_bytelen,
+                    self.signal16buff.buffer[self.signal16buff.tail as usize..].as_mut_ptr()
+                        as *mut c_void,
+                    readable_len as usize,
                 );
-                read_len == self.input_bytelen
-            } {}
-            if (read_len > 0) && (read_len < self.input_bytelen) {
-                // 残りの処理 トータル100msecまで試す(100msec超える場合はきっと切れた)
-                left_bytelen -= read_len as usize;
-                got_bytelen += read_len as usize;
-
-                let now = Instant::now();
-                let mut dur_mils: u128 = 0u128;
-
-                while (left_bytelen > 0) && (dur_mils < MAX_FIFO_WAIT_MILS) {
-                    let interval =
-                        (1.2 * self.step_per_msec * (left_bytelen as f64 / (CHANNELS * 2) as f64))
-                            as u64;
-                    if interval > 0 {
-                        thread::sleep(Duration::from_millis(interval));
-                    }
-                    read_len = libc::read(
-                        self.fifo_fd,
-                        self.signal16[got_bytelen..].as_mut_ptr() as *mut c_void,
-                        left_bytelen,
-                    );
-                    if read_len > 0 {
-                        left_bytelen -= read_len as usize;
-                        got_bytelen += read_len as usize;
-                    }
-                    dur_mils = now.elapsed().as_millis();
+                if read_len > 0 {
+                    self.signal16buff.after_read(read_len as i32);
                 }
-            }
+                read_len == readable_len as isize
+            } {}
         }
-
-        for i in 0..NUM_SAMPLES {
-            let j = i * CHANNELS * 2;
-            // little endian for Intel / Arm
-            self.signal[i] = ((((self.signal16[j + 1] as i16) << 8) & -256i16)
-                | (self.signal16[j] & 0x0ff) as i16) as f32
-                / 32767.0;
+        if let Some(head) = self
+            .signal16buff
+            .before_pos((self.offset * CHANNELS as u32) as i32)
+        {
+            for i in 0..NUM_SAMPLES {
+                let j = ((head + (i * CHANNELS * 2) as i32) % self.signal16buff.capacity) as usize;
+                // little endian for Intel / Arm
+                self.signal[i] = ((((self.signal16buff.buffer[j + 1] as i16) << 8) & -256i16)
+                    | (self.signal16buff.buffer[j] & 0x0ff) as i16)
+                    as f32
+                    / 32767.0;
+            }
+        } else {
+            for (_, bar) in bar_vals.iter_mut().enumerate().take(NUM_BARS) {
+                *bar = 0.0f64;
+            }
+            return;
         }
 
         let hann_window = hann_window(&self.signal[..]);
@@ -762,28 +803,32 @@ fn usage() {
     println!(" -r<pin>          GPIO pin number for RST: Default 27");
     println!(" -b<pin>          GPIO pin number for BLK: Default 24");
     println!(" -x<sw>           Audio visualizer ON(1)/OFF(0): Default 0");
+    println!(" -t<offset>       Vizualizer offset millisec(0-1000): Default 500");
+    println!("                       Effective only as -x1 specified");
 }
 
 /// Get Command-line parameters.
-fn get_param() -> (u8, u8, u8, u8, u8, u8) {
+fn get_param() -> (u8, u8, u8, u8, u8, u8, u32) {
     let mut spi = DEF_SPI_BUS;
     let mut cs = DEF_CS_PIN;
     let mut dc = DEF_GPIO_DC_PIN;
     let mut rst = DEF_GPIO_RST_PIN;
     let mut blk = DEF_GPIO_BLK_PIN;
     let mut vz = 0; // Default Off
+    let mut vf = DEF_VZ_OFFSET;
 
     for arg in env::args() {
         if &arg[0..1] == "-" {
             let v = &arg[2..];
-            match v.parse::<u8>() {
+            match v.parse::<u32>() {
                 Ok(val) => match &arg[0..2] {
-                    "-s" => spi = val,
-                    "-c" => cs = val,
-                    "-d" => dc = val,
-                    "-r" => rst = val,
-                    "-b" => blk = val,
-                    "-x" => vz = val,
+                    "-s" => spi = val as u8,
+                    "-c" => cs = val as u8,
+                    "-d" => dc = val as u8,
+                    "-r" => rst = val as u8,
+                    "-b" => blk = val as u8,
+                    "-x" => vz = val as u8,
+                    "-t" => vf = val,
                     _ => {
                         usage();
                         panic!()
@@ -796,17 +841,17 @@ fn get_param() -> (u8, u8, u8, u8, u8, u8) {
             };
         }
     }
-    (spi, cs, dc, rst, blk, vz)
+    (spi, cs, dc, rst, blk, vz, vf)
 }
 
 /// Main routine
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let (spi_n, cs_n, dc_n, rst_n, blk_n, vz_on) = get_param();
+    let (spi_n, cs_n, dc_n, rst_n, blk_n, vz_on, vz_ofst) = get_param();
 
     let mut state = State::new();
 
     #[allow(unused_assignments)]
-    let mut sp_info = SpInfo::new(-1);
+    let mut sp_info;
     let mut sp: Option<&mut SpInfo> = None;
 
     let gpio = Gpio::new().expect("Failed Gpio::new");
@@ -848,7 +893,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 exit(1);
             }
         }
-        sp_info = SpInfo::new(fifo_fd);
+        sp_info = SpInfo::new(fifo_fd, vz_ofst);
         sp = Some(&mut sp_info);
     }
 
